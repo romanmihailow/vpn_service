@@ -1,0 +1,1071 @@
+import asyncio
+from datetime import datetime, timedelta
+
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.enums import ParseMode
+from aiogram.types import (
+    Message,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    BotCommand,
+    CallbackQuery,
+)
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
+
+from .config import settings
+from . import db
+from .bot import INSTRUCTION_TEXT, send_vpn_config_to_user
+from . import wg
+from .logger import get_logger
+
+log = get_logger()
+
+router = Router()
+
+
+class AdminAddSub(StatesGroup):
+    waiting_for_target = State()
+    waiting_for_period = State()
+
+
+# Кнопка "Подключить VPN" с твоей ссылкой Tribute
+SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔐 Подключить VPN",
+                url="https://t.me/tribute/app?startapp=dAUr",
+            )
+        ]
+    ]
+)
+
+
+START_TEXT = (
+    "MaxNet VPN | Быстрый доступ без блокировок\n\n"
+    "⚡ Супербыстрый VPN на европейских серверах\n"
+    "🔐 Полная приватность и шифрование\n"
+    "📲 Ключи WireGuard для телефона и ПК\n"
+    "🤖 Автовыдача через бота, автоотключение по окончании подписки\n\n"
+    "Открой интернет без ограничений!\n\n"
+    "Чтобы оформить подписку, нажми кнопку ниже 👇"
+)
+
+SUPPORT_TEXT = (
+    "Если что-то пошло не так с оплатой или подключением VPN,\n"
+    "ты можешь написать в поддержку:\n\n"
+    "• @MaxNet_VPN\n"
+    "• @rmw_ok\n\n"
+    "Опиши проблему, укажи свой @username и, по возможности, приложи скриншоты."
+)
+
+SUBSCRIPTION_TEXT = (
+    "💳 <b>Тарифы MaxNet VPN</b>\n\n"
+    "🔹 <b>1 месяц</b> — <b>2 €</b>\n"
+    "🔹 <b>3 месяца</b> — <b>5 €</b>\n"
+    "🔹 <b>6 месяцев</b> — <b>9 €</b>\n"
+    "🔹 <b>1 год</b> — <b>17 €</b>\n"
+    "🔹 <b>Навсегда</b> — <b>100 €</b>\n\n"
+    "🎁 <b>Скидка на первый месяц</b>\n"
+    "Если ты оформляешь подписку первый раз — первый месяц стоит <b>1 €</b> вместо 2 €.\n\n"
+    "Все платежи проходят через Tribute.\n"
+    "Чтобы оформить подписку, нажми кнопку «Подключить VPN» под этим сообщением или используй /start."
+)
+
+ADMIN_INFO_TEXT = (
+    "🛠 <b>Админ-команды MaxNet VPN</b>\n\n"
+    "/admin_cmd — меню админа с кнопками.\n"
+    "/admin_info — это описание команд.\n\n"
+    "/admin_last — показать последнюю подписку.\n"
+    "/admin_list — последние N подписок.\n"
+    "/admin_sub &lt;id&gt; — показать подписку по ID с кнопками.\n\n"
+    "/admin_activate &lt;id&gt; — активировать подписку и добавить peer в WireGuard.\n"
+    "/admin_deactivate &lt;id&gt; — деактивировать подписку и удалить peer.\n"
+    "/admin_delete &lt;id&gt; — полностью удалить подписку из БД и из WireGuard.\n\n"
+    "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
+    "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки."
+)
+
+def is_admin(message: Message) -> bool:
+    """
+    Проверяем, что команда пришла от администратора.
+    ID администратора берём из настроек (ADMIN_TELEGRAM_ID).
+    """
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    return admin_id != 0 and message.from_user is not None and message.from_user.id == admin_id
+
+@router.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    await message.answer(
+        START_TEXT,
+        reply_markup=SUBSCRIBE_KEYBOARD,
+    )
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    # шлём нашу подробную инструкцию из bot.INSTRUCTION_TEXT
+    await message.answer(
+        INSTRUCTION_TEXT,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(Command("support"))
+async def cmd_support(message: Message) -> None:
+    await message.answer(
+        SUPPORT_TEXT,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("subscription"))
+async def cmd_subscription(message: Message) -> None:
+    await message.answer(
+        SUBSCRIPTION_TEXT,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(Command("status"))
+async def cmd_status(message: Message) -> None:
+    user_id = message.from_user.id
+
+    sub = db.get_latest_subscription_for_telegram(telegram_user_id=user_id)
+    if not sub:
+        await message.answer(
+            "У тебя пока нет активной VPN-подписки.\n\n"
+            "Нажми кнопку «Подключить VPN» в меню или используй /start.",
+            reply_markup=SUBSCRIBE_KEYBOARD,
+        )
+        return
+
+    vpn_ip = sub.get("vpn_ip")
+    expires_at = sub.get("expires_at")
+
+    if isinstance(expires_at, datetime):
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    else:
+        expires_str = str(expires_at)
+
+    text = (
+        "🔐 Текущий статус VPN-подписки:\n\n"
+        f"• VPN IP: <code>{vpn_ip}</code>\n"
+        f"• Действует до: <b>{expires_str}</b>\n\n"
+        "Если связь пропадёт после этой даты — просто продли подписку через Tribute."
+    )
+
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    
+@router.message(Command("admin_info"))
+async def cmd_admin_info(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    await message.answer(
+        ADMIN_INFO_TEXT,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(Command("admin_cmd"))
+async def cmd_admin_cmd(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    text = (
+        "🛠 <b>Админ-меню</b>\n\n"
+        "Здесь можно посмотреть команды и выдать подписку вручную.\n\n"
+        "Выбери действие кнопками ниже:"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="ℹ️ Описание команд",
+                    callback_data="admcmd:info",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="➕ Выдать подписку (/add_sub)",
+                    callback_data="admcmd:add_sub",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🕘 Последняя подписка",
+                    callback_data="admcmd:last",
+                ),
+                InlineKeyboardButton(
+                    text="📃 Список подписок",
+                    callback_data="admcmd:list",
+                ),
+            ],
+        ]
+    )
+
+    await message.answer(
+        text,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+    
+@router.message(Command("admin_last"))
+async def cmd_admin_last(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    subs = db.get_last_subscriptions(limit=1)
+    if not subs:
+        await message.answer("Подписок в базе пока нет.")
+        return
+
+    sub = subs[0]
+    sub_id = sub.get("id")
+    telegram_user_id = sub.get("telegram_user_id")
+    vpn_ip = sub.get("vpn_ip")
+    active = sub.get("active")
+    expires_at = sub.get("expires_at")
+    last_event_name = sub.get("last_event_name")
+
+    if isinstance(expires_at, datetime):
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    else:
+        expires_str = str(expires_at)
+
+    text = (
+        "Последняя подписка:\n\n"
+        f"ID: {sub_id}\n"
+        f"TG: {telegram_user_id}\n"
+        f"IP: {vpn_ip}\n"
+        f"active={active}\n"
+        f"до {expires_str}\n"
+        f"event={last_event_name}\n\n"
+        "Можно управлять этой подпиской кнопками ниже или командами:\n"
+        f"/admin_activate {sub_id}\n"
+        f"/admin_deactivate {sub_id}\n"
+        f"/admin_delete {sub_id}"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Активировать",
+                    callback_data=f"adm:act:{sub_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⛔ Деактивировать",
+                    callback_data=f"adm:deact:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"adm:del:{sub_id}",
+                )
+            ],
+        ]
+    )
+
+    await message.answer(
+        text,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("admin_sub"))
+async def cmd_admin_sub(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Использование: /admin_sub ID_подписки")
+        return
+
+    try:
+        sub_id = int(parts[1])
+    except ValueError:
+        await message.answer("ID подписки должен быть числом.")
+        return
+
+    sub = db.get_subscription_by_id(sub_id=sub_id)
+    if not sub:
+        await message.answer("Подписка не найдена.")
+        return
+
+    telegram_user_id = sub.get("telegram_user_id")
+    vpn_ip = sub.get("vpn_ip")
+    active = sub.get("active")
+    expires_at = sub.get("expires_at")
+    last_event_name = sub.get("last_event_name")
+
+    if isinstance(expires_at, datetime):
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    else:
+        expires_str = str(expires_at)
+
+    text = (
+        "Подписка:\n\n"
+        f"ID: {sub_id}\n"
+        f"TG: {telegram_user_id}\n"
+        f"IP: {vpn_ip}\n"
+        f"active={active}\n"
+        f"до {expires_str}\n"
+        f"event={last_event_name}\n\n"
+        "Можно управлять этой подпиской кнопками ниже или командами:\n"
+        f"/admin_activate {sub_id}\n"
+        f"/admin_deactivate {sub_id}\n"
+        f"/admin_delete {sub_id}"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Активировать",
+                    callback_data=f"adm:act:{sub_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⛔ Деактивировать",
+                    callback_data=f"adm:deact:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"adm:del:{sub_id}",
+                )
+            ],
+        ]
+    )
+
+    await message.answer(
+        text,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("admin_list"))
+async def cmd_admin_list(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    # Берём последние 30 подписок, чтобы не упереться в лимит длины сообщения
+    subs = db.get_last_subscriptions(limit=30)
+    if not subs:
+        await message.answer("Подписок в базе пока нет.")
+        return
+
+    lines = []
+    for sub in subs:
+        sub_id = sub.get("id")
+        telegram_user_id = sub.get("telegram_user_id")
+        vpn_ip = sub.get("vpn_ip")
+        active = sub.get("active")
+        expires_at = sub.get("expires_at")
+        last_event_name = sub.get("last_event_name")
+
+        if isinstance(expires_at, datetime):
+            expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        else:
+            expires_str = str(expires_at)
+
+        line = (
+            f"ID: {sub_id} | TG: {telegram_user_id} | IP: {vpn_ip} | "
+            f"active={active} | до {expires_str} | event={last_event_name}"
+        )
+        lines.append(line)
+
+    text = "Последние подписки:\n\n" + "\n".join(lines)
+    await message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("add_sub"))
+async def cmd_add_sub(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    await state.set_state(AdminAddSub.waiting_for_target)
+    await message.answer(
+        "Перешли сюда <b>любое сообщение</b> от пользователя, которому нужно выдать VPN-доступ.\n\n"
+        "Либо отправь его <b>числовой Telegram ID</b> вручную.",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(AdminAddSub.waiting_for_target)
+async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    target_id = None
+
+    # 1) Пересланное сообщение от пользователя
+    if message.forward_from and message.forward_from.id:
+        target_id = message.forward_from.id
+    # 2) Просто числовой Telegram ID
+    elif message.text and message.text.isdigit():
+        try:
+            target_id = int(message.text)
+        except ValueError:
+            target_id = None
+
+    if not target_id:
+        await message.answer(
+            "Не смог определить пользователя.\n\n"
+            "Перешли сообщение от пользователя или отправь его числовой Telegram ID.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(target_telegram_user_id=target_id)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="1 месяц",
+                    callback_data="addsub:period:1m",
+                ),
+                InlineKeyboardButton(
+                    text="3 месяца",
+                    callback_data="addsub:period:3m",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="6 месяцев",
+                    callback_data="addsub:period:6m",
+                ),
+                InlineKeyboardButton(
+                    text="1 год",
+                    callback_data="addsub:period:1y",
+                ),
+            ],
+        ]
+    )
+
+    await state.set_state(AdminAddSub.waiting_for_period)
+    await message.answer(
+        f"Определён пользователь с TG ID: <code>{target_id}</code>.\n\n"
+        "Теперь выбери срок подписки:",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("admin_deactivate"))
+async def cmd_admin_deactivate(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Использование: /admin_deactivate ID_подписки")
+        return
+
+    try:
+        sub_id = int(parts[1])
+    except ValueError:
+        await message.answer("ID подписки должен быть числом.")
+        return
+
+    sub = db.deactivate_subscription_by_id(
+        sub_id=sub_id,
+        event_name="admin_deactivate",
+    )
+    if not sub:
+        await message.answer("Подписка не найдена или уже деактивирована.")
+        return
+
+    pub_key = sub.get("wg_public_key")
+    if pub_key:
+        try:
+            log.info("[TelegramAdmin] Remove peer pubkey=%s for sub_id=%s", pub_key, sub_id)
+            wg.remove_peer(pub_key)
+        except Exception as e:
+            log.error(
+                "[TelegramAdmin] Failed to remove peer from WireGuard for sub_id=%s: %s",
+                sub_id,
+                repr(e),
+            )
+
+    telegram_user_id = sub.get("telegram_user_id")
+    vpn_ip = sub.get("vpn_ip")
+
+    await message.answer(
+        f"Подписка с ID {sub_id} деактивирована.\n"
+        f"Пользователь TG: {telegram_user_id}\n"
+        f"VPN IP: {vpn_ip}\n"
+        f"Peer в WireGuard удалён (или его не было).",
+        disable_web_page_preview=True,
+    )
+    
+@router.message(Command("admin_activate"))
+async def cmd_admin_activate(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Использование: /admin_activate ID_подписки")
+        return
+
+    try:
+        sub_id = int(parts[1])
+    except ValueError:
+        await message.answer("ID подписки должен быть числом.")
+        return
+
+    sub = db.activate_subscription_by_id(
+        sub_id=sub_id,
+        event_name="admin_activate",
+    )
+    if not sub:
+        await message.answer("Подписка не найдена или уже активна.")
+        return
+
+    pub_key = sub.get("wg_public_key")
+    vpn_ip = sub.get("vpn_ip")
+    telegram_user_id = sub.get("telegram_user_id")
+
+    if not pub_key or not vpn_ip:
+        await message.answer("У подписки нет wg_public_key или vpn_ip, не могу добавить peer.")
+        return
+
+    allowed_ip = f"{vpn_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+    try:
+        log.info(
+            "[TelegramAdmin] Add peer pubkey=%s ip=%s for sub_id=%s",
+            pub_key,
+            allowed_ip,
+            sub_id,
+        )
+        wg.add_peer(
+            public_key=pub_key,
+            allowed_ip=allowed_ip,
+            telegram_user_id=telegram_user_id,
+        )
+    except Exception as e:
+        log.error(
+            "[TelegramAdmin] Failed to add peer to WireGuard for sub_id=%s: %s",
+            sub_id,
+            repr(e),
+        )
+        await message.answer(
+            "Подписка в базе активирована, но при добавлении peer в WireGuard произошла ошибка.\n"
+            "Проверь логи и состояние wg вручную.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await message.answer(
+        f"Подписка с ID {sub_id} активирована.\n"
+        f"Пользователь TG: {telegram_user_id}\n"
+        f"VPN IP: {vpn_ip}\n"
+        f"Peer в WireGuard добавлен.",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(Command("admin_delete"))
+async def cmd_admin_delete(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer("Использование: /admin_delete ID_подписки")
+        return
+
+    try:
+        sub_id = int(parts[1])
+    except ValueError:
+        await message.answer("ID подписки должен быть числом.")
+        return
+
+    sub = db.get_subscription_by_id(sub_id=sub_id)
+    if not sub:
+        await message.answer("Подписка не найдена.")
+        return
+
+    pub_key = sub.get("wg_public_key")
+    vpn_ip = sub.get("vpn_ip")
+    telegram_user_id = sub.get("telegram_user_id")
+
+    if pub_key:
+        try:
+            log.info("[TelegramAdmin] Remove peer (delete) pubkey=%s for sub_id=%s", pub_key, sub_id)
+            wg.remove_peer(pub_key)
+        except Exception as e:
+            log.error(
+                "[TelegramAdmin] Failed to remove peer (delete) from WireGuard for sub_id=%s: %s",
+                sub_id,
+                repr(e),
+            )
+
+    deleted = db.delete_subscription_by_id(sub_id=sub_id)
+    if not deleted:
+        await message.answer(
+            "Не удалось удалить подписку из базы (возможно, её уже удалили). "
+            "Peer в WireGuard, если был, мы уже попытались удалить.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await message.answer(
+        f"Подписка с ID {sub_id} полностью удалена.\n"
+        f"Пользователь TG: {telegram_user_id}\n"
+        f"VPN IP: {vpn_ip}\n"
+        f"Peer в WireGuard удалён (если был).",
+        disable_web_page_preview=True,
+    )
+    
+@router.callback_query(AdminAddSub.waiting_for_period, F.data.startswith("addsub:period:"))
+async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, period_code = parts
+
+    if period_code == "1m":
+        days = 30
+        period_label = "1 месяц"
+    elif period_code == "3m":
+        days = 90
+        period_label = "3 месяца"
+    elif period_code == "6m":
+        days = 180
+        period_label = "6 месяцев"
+    elif period_code == "1y":
+        days = 365
+        period_label = "1 год"
+    else:
+        await callback.answer("Неизвестный срок подписки.", show_alert=True)
+        return
+
+    state_data = await state.get_data()
+    target_id = state_data.get("target_telegram_user_id")
+    if not target_id:
+        await callback.answer("Не удалось получить данные пользователя, начни /add_sub заново.", show_alert=True)
+        await state.clear()
+        return
+
+    now = datetime.utcnow()
+    expires_at = now + timedelta(days=days)
+
+    # Генерим ключи и IP
+    client_priv, client_pub = wg.generate_keypair()
+    client_ip = wg.generate_client_ip()
+    allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+    # Добавляем peer в WireGuard
+    try:
+        log.info(
+            "[TelegramAdmin] Add peer (manual) pubkey=%s ip=%s for tg_id=%s",
+            client_pub,
+            allowed_ip,
+            target_id,
+        )
+        wg.add_peer(
+            public_key=client_pub,
+            allowed_ip=allowed_ip,
+            telegram_user_id=target_id,
+        )
+    except Exception as e:
+        log.error(
+            "[TelegramAdmin] Failed to add peer (manual) to WireGuard for tg_id=%s: %s",
+            target_id,
+            repr(e),
+        )
+        await callback.answer(
+            "Ошибка при добавлении peer в WireGuard. Подписка не создана.",
+            show_alert=True,
+        )
+        await state.clear()
+        return
+
+    # Записываем подписку в БД
+    try:
+        db.insert_subscription(
+            tribute_user_id=0,
+            telegram_user_id=target_id,
+            subscription_id=0,
+            period_id=0,
+            period=f"admin_{period_code}",
+            channel_id=0,
+            channel_name="Admin manual",
+            vpn_ip=client_ip,
+            wg_private_key=client_priv,
+            wg_public_key=client_pub,
+            expires_at=expires_at,
+            event_name="admin_manual_add",
+        )
+        log.info(
+            "[DB] Inserted manual subscription for tg_id=%s vpn_ip=%s expires_at=%s",
+            target_id,
+            client_ip,
+            expires_at,
+        )
+    except Exception as e:
+        log.error(
+            "[DB] Failed to insert manual subscription for tg_id=%s: %s",
+            target_id,
+            repr(e),
+        )
+        await callback.answer(
+            "Ошибка при записи подписки в базу. Проверь логи.",
+            show_alert=True,
+        )
+        await state.clear()
+        return
+
+    # Генерим конфиг и отправляем пользователю
+    config_text = wg.build_client_config(
+        client_private_key=client_priv,
+        client_ip=client_ip,
+    )
+
+    try:
+        await send_vpn_config_to_user(
+            telegram_user_id=target_id,
+            config_text=config_text,
+            caption=(
+                "Администратор выдал тебе доступ к MaxNet VPN.\n\n"
+                "Ниже — конфиг WireGuard и QR для подключения."
+            ),
+        )
+        log.info("[Telegram] Manual config sent to %s", target_id)
+    except Exception as e:
+        log.error(
+            "[Telegram] Failed to send manual config to %s: %s",
+            target_id,
+            repr(e),
+        )
+
+    # Сообщаем админу
+    text = (
+        "✅ Ручная подписка создана.\n\n"
+        f"Пользователь TG: <code>{target_id}</code>\n"
+        f"VPN IP: <code>{client_ip}</code>\n"
+        f"Срок: <b>{period_label}</b>\n"
+        f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</b>"
+    )
+    await callback.message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
+
+    await callback.answer("Подписка выдана.")
+    await state.clear()
+    
+@router.callback_query(F.data.startswith("admcmd:"))
+async def admin_cmd_inline(callback: CallbackQuery, state: FSMContext) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 2:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, action = parts
+
+    if action == "info":
+        await callback.message.answer(
+            ADMIN_INFO_TEXT,
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    if action == "add_sub":
+        # Запускаем тот же процесс, что и по /add_sub
+        await state.set_state(AdminAddSub.waiting_for_target)
+        await callback.message.answer(
+            "Перешли сюда <b>любое сообщение</b> от пользователя, которому нужно выдать VPN-доступ.\n\n"
+            "Либо отправь его <b>числовой Telegram ID</b> вручную.",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    if action == "last":
+        await cmd_admin_last(callback.message)
+        await callback.answer()
+        return
+
+    if action == "list":
+        await cmd_admin_list(callback.message)
+        await callback.answer()
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+    
+@router.callback_query(F.data.startswith("adm:"))
+async def admin_inline_callback(callback: CallbackQuery) -> None:
+    # Проверяем админа по пользователю, который НАЖАЛ кнопку
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, action, sub_id_str = parts
+
+    try:
+        sub_id = int(sub_id_str)
+    except ValueError:
+        await callback.answer("Некорректный ID.", show_alert=True)
+        return
+
+    # ДЕАКТИВАЦИЯ
+    if action == "deact":
+        sub = db.deactivate_subscription_by_id(
+            sub_id=sub_id,
+            event_name="admin_deactivate",
+        )
+        if not sub:
+            await callback.answer("Подписка не найдена или уже деактивирована.", show_alert=True)
+            return
+
+        pub_key = sub.get("wg_public_key")
+        if pub_key:
+            try:
+                log.info("[TelegramAdmin] Remove peer (inline) pubkey=%s for sub_id=%s", pub_key, sub_id)
+                wg.remove_peer(pub_key)
+            except Exception as e:
+                log.error(
+                    "[TelegramAdmin] Failed to remove peer (inline) from WireGuard for sub_id=%s: %s",
+                    sub_id,
+                    repr(e),
+                )
+
+        telegram_user_id = sub.get("telegram_user_id")
+        vpn_ip = sub.get("vpn_ip")
+
+        text = (
+            f"Подписка с ID {sub_id} деактивирована.\n"
+            f"Пользователь TG: {telegram_user_id}\n"
+            f"VPN IP: {vpn_ip}\n"
+            f"Peer в WireGuard удалён (или его не было)."
+        )
+        await callback.message.answer(text)
+        await callback.answer("Подписка деактивирована.")
+        return
+
+    # АКТИВАЦИЯ
+    if action == "act":
+        sub = db.activate_subscription_by_id(
+            sub_id=sub_id,
+            event_name="admin_activate",
+        )
+        if not sub:
+            await callback.answer("Подписка не найдена или уже активна.", show_alert=True)
+            return
+
+        pub_key = sub.get("wg_public_key")
+        vpn_ip = sub.get("vpn_ip")
+        telegram_user_id = sub.get("telegram_user_id")
+
+        if not pub_key or not vpn_ip:
+            await callback.answer("Нет wg_public_key или vpn_ip, не могу добавить peer.", show_alert=True)
+            return
+
+        allowed_ip = f"{vpn_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+        try:
+            log.info(
+                "[TelegramAdmin] Add peer (inline) pubkey=%s ip=%s for sub_id=%s",
+                pub_key,
+                allowed_ip,
+                sub_id,
+            )
+            wg.add_peer(
+                public_key=pub_key,
+                allowed_ip=allowed_ip,
+                telegram_user_id=telegram_user_id,
+            )
+        except Exception as e:
+            log.error(
+                "[TelegramAdmin] Failed to add peer (inline) to WireGuard for sub_id=%s: %s",
+                sub_id,
+                repr(e),
+            )
+            await callback.answer(
+                "Подписка активирована в базе, но peer в WireGuard не добавлен — смотри логи.",
+                show_alert=True,
+            )
+            return
+
+        text = (
+            f"Подписка с ID {sub_id} активирована.\n"
+            f"Пользователь TG: {telegram_user_id}\n"
+            f"VPN IP: {vpn_ip}\n"
+            f"Peer в WireGuard добавлен."
+        )
+        await callback.message.answer(text)
+        await callback.answer("Подписка активирована.")
+        return
+
+    # УДАЛЕНИЕ
+    if action == "del":
+        sub = db.get_subscription_by_id(sub_id=sub_id)
+        if not sub:
+            await callback.answer("Подписка не найдена.", show_alert=True)
+            return
+
+        pub_key = sub.get("wg_public_key")
+        vpn_ip = sub.get("vpn_ip")
+        telegram_user_id = sub.get("telegram_user_id")
+
+        if pub_key:
+            try:
+                log.info("[TelegramAdmin] Remove peer (inline delete) pubkey=%s for sub_id=%s", pub_key, sub_id)
+                wg.remove_peer(pub_key)
+            except Exception as e:
+                log.error(
+                    "[TelegramAdmin] Failed to remove peer (inline delete) from WireGuard for sub_id=%s: %s",
+                    sub_id,
+                    repr(e),
+                )
+
+        deleted = db.delete_subscription_by_id(sub_id=sub_id)
+        if not deleted:
+            await callback.answer(
+                "Не удалось удалить подписку из базы (возможно, её уже удалили).",
+                show_alert=True,
+            )
+            return
+
+        text = (
+            f"Подписка с ID {sub_id} полностью удалена.\n"
+            f"Пользователь TG: {telegram_user_id}\n"
+            f"VPN IP: {vpn_ip}\n"
+            f"Peer в WireGuard удалён (если был)."
+        )
+        await callback.message.answer(text)
+        await callback.answer("Подписка удалена.")
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
+
+async def set_bot_commands(bot: Bot) -> None:
+    commands = [
+        BotCommand(command="start", description="Начать / подключить VPN"),
+        BotCommand(command="help", description="Инструкция по подключению"),
+        BotCommand(command="status", description="Статус VPN-подписки"),
+        BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
+        BotCommand(command="support", description="Связаться с поддержкой"),
+    ]
+    await bot.set_my_commands(commands)
+
+async def auto_deactivate_expired_subscriptions() -> None:
+    """
+    Периодически ищет в базе все активные подписки с истекшим expires_at,
+    деактивирует их и удаляет peer из WireGuard.
+    """
+    while True:
+        try:
+            expired_subs = db.get_expired_active_subscriptions()
+            for sub in expired_subs:
+                sub_id = sub.get("id")
+                pub_key = sub.get("wg_public_key")
+
+                if not sub_id:
+                    continue
+
+                # помечаем неактивной в базе
+                deactivated = db.deactivate_subscription_by_id(
+                    sub_id=sub_id,
+                    event_name="auto_expire",
+                )
+
+                if not deactivated:
+                    continue
+
+                if pub_key:
+                    try:
+                        log.info(
+                            "[AutoExpire] Remove peer pubkey=%s for sub_id=%s",
+                            pub_key,
+                            sub_id,
+                        )
+                        wg.remove_peer(pub_key)
+                    except Exception as e:
+                        log.error(
+                            "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
+                            sub_id,
+                            repr(e),
+                        )
+        except Exception as e:
+            log.error("[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s", repr(e))
+
+        # Проверяем раз в 60 секунд (можешь настроить под себя)
+        await asyncio.sleep(60)
+
+async def main() -> None:
+    if not settings.TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
+
+    from aiogram.client.default import DefaultBotProperties
+
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    await set_bot_commands(bot)
+
+    # запускаем фоновый воркер авто-деактивации
+    asyncio.create_task(auto_deactivate_expired_subscriptions())
+
+    await dp.start_polling(bot)
+
+
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
