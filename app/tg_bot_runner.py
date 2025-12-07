@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
+from pathlib import Path
+
 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
@@ -9,7 +11,9 @@ from aiogram.types import (
     InlineKeyboardButton,
     BotCommand,
     CallbackQuery,
+    FSInputFile,
 )
+
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -23,6 +27,10 @@ from .logger import get_logger
 log = get_logger()
 
 router = Router()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+TERMS_FILE_PATH = BASE_DIR / "TERMS.md"
+
 
 
 class AdminAddSub(StatesGroup):
@@ -148,6 +156,16 @@ async def cmd_terms(message: Message) -> None:
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+    try:
+        doc = FSInputFile(str(TERMS_FILE_PATH))
+        await message.answer_document(
+            document=doc,
+            caption="Полная версия пользовательского соглашения в файле TERMS.md",
+        )
+    except Exception as e:
+        log.error("Failed to send TERMS.md: %s", repr(e))
+
 
 
 ADMIN_INFO_TEXT = (
