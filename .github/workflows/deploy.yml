@@ -4,36 +4,25 @@ on:
   push:
     branches:
       - main
-      - master
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # known_hosts чтобы не спрашивал "Are you sure you want to continue connecting?"
-          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
-
-      - name: Deploy to server (git pull + docker compose up)
-        run: |
-          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
-          cd /home/vpn_service
-
-          # Подтягиваем свежий код
-          git pull
-
-          # Пересобираем образ и поднимаем контейнер
-          docker compose down
-          docker compose build
-          docker compose up -d
-
-          docker ps | grep maxnet_vpn_bot || echo "maxnet_vpn_bot not running!"
-          EOF
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd /home/vpn_service
+            git pull origin main
+            docker compose down
+            docker compose build
+            docker compose up -d
