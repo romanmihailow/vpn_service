@@ -2,7 +2,8 @@ import hmac
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
 
 from fastapi import FastAPI, Request, HTTPException
 from aiogram.exceptions import TelegramBadRequest
@@ -112,11 +113,26 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
     tribute_user_id = int(payload["user_id"])
     telegram_user_id = int(payload["telegram_user_id"])
 
+    telegram_user_name: Optional[str] = None
+    try:
+        # если Tribute когда-нибудь начнёт присылать username в payload,
+        # можно сначала взять его оттуда:
+        # telegram_user_name = payload.get("telegram_user_name") или payload.get("telegram_username")
+        # а затем, если его нет, дёргать Telegram.
+        telegram_user_name = await bot.get_telegram_username(telegram_user_id)
+    except Exception as e:
+        log.error(
+            "[Telegram] Failed to fetch username for %s in new_subscription: %s",
+            telegram_user_id,
+            repr(e),
+        )
+
     log.info(
         "[new_subscription] tribute_user_id=%s telegram_id=%s",
         tribute_user_id,
         telegram_user_id,
     )
+
 
     subscription_id = int(payload["subscription_id"])
     period_id = int(payload["period_id"])
@@ -167,6 +183,7 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
     db.insert_subscription(
         tribute_user_id=tribute_user_id,
         telegram_user_id=telegram_user_id,
+        telegram_user_name=telegram_user_name,
         subscription_id=subscription_id,
         period_id=period_id,
         period=period,
@@ -178,6 +195,8 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
         expires_at=expires_at,
         event_name="new_subscription",
     )
+
+
 
     log.info(
         "[DB] Inserted subscription tribute_user_id=%s vpn_ip=%s",
@@ -237,9 +256,22 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
     """
     tribute_user_id = int(payload["user_id"])
     telegram_user_id = int(payload["telegram_user_id"])
+
+    telegram_user_name: Optional[str] = None
+    try:
+        # аналогично, можно сперва пытаться взять из payload, если Tribute начнёт слать username
+        telegram_user_name = await bot.get_telegram_username(telegram_user_id)
+    except Exception as e:
+        log.error(
+            "[Telegram] Failed to fetch username for %s in new_donation: %s",
+            telegram_user_id,
+            repr(e),
+        )
+
     donation_request_id = int(payload["donation_request_id"])
     period = str(payload.get("period", "monthly"))
     channel_name = str(payload.get("donation_name", "donation"))
+
 
     # Синтетические значения, чтобы уложиться в текущую схему БД
     subscription_id = donation_request_id
@@ -335,6 +367,7 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
     db.insert_subscription(
         tribute_user_id=tribute_user_id,
         telegram_user_id=telegram_user_id,
+        telegram_user_name=telegram_user_name,
         subscription_id=subscription_id,
         period_id=period_id,
         period=period,
@@ -346,6 +379,8 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
         expires_at=expires_at,
         event_name="new_donation",
     )
+
+
 
     log.info(
         "[DB] Inserted donation subscription tribute_user_id=%s vpn_ip=%s",

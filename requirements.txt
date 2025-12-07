@@ -1,1 +1,7 @@
-pip freeze > requirements.txt
+aiogram==3.13.1
+python-dotenv==1.0.1
+pydantic-settings==2.6.1
+psycopg2-binary==2.9.9
+uvloop==0.20.0
+qrcode[pil]==7.4.2
+Pillow==10.4.0

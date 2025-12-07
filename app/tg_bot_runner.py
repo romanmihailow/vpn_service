@@ -50,8 +50,29 @@ START_TEXT = (
     "📲 Ключи WireGuard для телефона и ПК\n"
     "🤖 Автовыдача через бота, автоотключение по окончании подписки\n\n"
     "Открой интернет без ограничений!\n\n"
-    "Чтобы оформить подписку, нажми кнопку ниже 👇"
+    "Чтобы оформить подписку, нажми кнопку ниже 👇\n\n"
+    "Используя бота MaxNet VPN, ты подтверждаешь, что ознакомился с Пользовательским "
+    "соглашением (/terms) и принимаешь его."
 )
+
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    await message.answer(
+        START_TEXT,
+        reply_markup=SUBSCRIBE_KEYBOARD,
+    )
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await message.answer(
+        INSTRUCTION_TEXT,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
 
 SUPPORT_TEXT = (
     "Если что-то пошло не так с оплатой или подключением VPN,\n"
@@ -60,6 +81,7 @@ SUPPORT_TEXT = (
     "• @rmw_ok\n\n"
     "Опиши проблему, укажи свой @username и, по возможности, приложи скриншоты."
 )
+
 
 SUBSCRIPTION_TEXT = (
     "💳 <b>Тарифы MaxNet VPN</b>\n\n"
@@ -74,8 +96,63 @@ SUBSCRIPTION_TEXT = (
     "Чтобы оформить подписку, нажми кнопку «Подключить VPN» под этим сообщением или используй /start."
 )
 
+
+AGREEMENT_TEXT = (
+    "<b>Пользовательское соглашение MaxNet VPN</b>\n\n"
+    "<b>1. Общие положения</b>\n"
+    "1.1. Это соглашение регулирует использование VPN-сервиса MaxNet VPN, доступ к которому "
+    "предоставляется через Telegram-бота.\n"
+    "1.2. Используя бота и подключаясь к VPN, ты подтверждаешь, что ознакомился с данным "
+    "соглашением и принимаешь его условия.\n\n"
+    "<b>2. Назначение сервиса</b>\n"
+    "2.1. Сервис предназначен для обеспечения шифрованного соединения и обхода блокировок "
+    "для личного и законного использования.\n"
+    "2.2. Сервис не предназначен для совершения противоправных действий.\n\n"
+    "<b>3. Оплата и подписка</b>\n"
+    "3.1. Оплата доступа к VPN осуществляется через сервис Tribute по тарифам, указанным в боте.\n"
+    "3.2. Доступ предоставляется на оплаченный период. По его окончании подключение "
+    "может быть автоматически отключено.\n\n"
+    "<b>4. Ограничения и ответственность пользователя</b>\n"
+    "4.1. Запрещено использовать сервис для:\n"
+    "• распространения вредоносного ПО;\n"
+    "• атак (DDoS и других);\n"
+    "• рассылки спама;\n"
+    "• распространения незаконного контента;\n"
+    "• любых действий, нарушающих законы твоей страны или страны размещения серверов.\n"
+    "4.2. Ты несёшь полную ответственность за действия, совершаемые через VPN-подключение.\n\n"
+    "<b>5. Данные и конфиденциальность</b>\n"
+    "5.1. Для работы сервиса мы обрабатываем минимальный объём данных, необходимый для "
+    "предоставления доступа: твой Telegram ID, статус подписки, сроки её действия, выданный VPN-IP.\n"
+    "5.2. Мы не используем эти данные для целей, не связанных с работой сервиса, и не передаём их "
+    "третьим лицам, за исключением случаев, прямо предусмотренных законом.\n\n"
+    "<b>6. Ограничение ответственности</b>\n"
+    "6.1. Сервис предоставляется по принципу «как есть» (AS IS).\n"
+    "6.2. Мы не гарантируем абсолютную доступность серверов, отсутствие сбоев или блокировок "
+    "со стороны третьих лиц.\n"
+    "6.3. Мы не несём ответственность за убытки, вызванные невозможностью использования сервиса, "
+    "блокировками, техническими сбоями или действиями третьих лиц.\n\n"
+    "<b>7. Изменение условий</b>\n"
+    "7.1. Условия соглашения могут обновляться. Актуальная версия всегда доступна по команде /terms.\n"
+    "7.2. Продолжение использования сервиса после изменения условий считается согласием с ними.\n\n"
+    "<b>8. Контакты</b>\n"
+    "По вопросам работы сервиса и соглашения можно связаться через поддержку:\n"
+    "• @MaxNet_VPN\n"
+    "• @rmw_ok"
+)
+
+
+@router.message(Command("terms"))
+async def cmd_terms(message: Message) -> None:
+    await message.answer(
+        AGREEMENT_TEXT,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 ADMIN_INFO_TEXT = (
     "🛠 <b>Админ-команды MaxNet VPN</b>\n\n"
+
     "/admin_cmd — меню админа с кнопками.\n"
     "/admin_info — это описание команд.\n\n"
     "/admin_last — показать последнюю подписку.\n"
@@ -92,31 +169,43 @@ def is_admin(message: Message) -> bool:
     """
     Проверяем, что команда пришла от администратора.
     ID администратора берём из настроек (ADMIN_TELEGRAM_ID).
+
+    Важно:
+    - для обычных команд (/admin_last, /admin_list, ...) проверяем, что это именно админ;
+    - для сообщений бота (которые вызываются из инлайн-кнопок) считаем их "админскими",
+      потому что реальный админ уже проверен в callback-хендлере.
     """
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
-    return admin_id != 0 and message.from_user is not None and message.from_user.id == admin_id
 
-@router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
-    await message.answer(
-        START_TEXT,
-        reply_markup=SUBSCRIBE_KEYBOARD,
-    )
+    if admin_id == 0 or message.from_user is None:
+        return False
 
-@router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    # шлём нашу подробную инструкцию из bot.INSTRUCTION_TEXT
-    await message.answer(
-        INSTRUCTION_TEXT,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    # обычный случай: команда напрямую от админа
+    if message.from_user.id == admin_id:
+        return True
+
+    # случай, когда handler вызывается на сообщении бота (message.from_user.is_bot = True),
+    # но сюда мы попадаем только из inline-хендлеров, где уже проверен callback.from_user.id == admin_id
+    if message.from_user.is_bot:
+        return True
+
+    return False
+
 
 
 @router.message(Command("support"))
 async def cmd_support(message: Message) -> None:
     await message.answer(
         SUPPORT_TEXT,
+        disable_web_page_preview=True,
+    )
+
+@router.message(Command("my_id"))
+async def cmd_my_id(message: Message) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    await message.answer(
+        f"Твой Telegram ID: <code>{message.from_user.id}</code>\n"
+        f"ADMIN_TELEGRAM_ID из .env: <code>{admin_id}</code>",
         disable_web_page_preview=True,
     )
 
@@ -233,6 +322,7 @@ async def cmd_admin_last(message: Message) -> None:
     sub = subs[0]
     sub_id = sub.get("id")
     telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
     vpn_ip = sub.get("vpn_ip")
     active = sub.get("active")
     expires_at = sub.get("expires_at")
@@ -243,10 +333,15 @@ async def cmd_admin_last(message: Message) -> None:
     else:
         expires_str = str(expires_at)
 
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
+
     text = (
         "Последняя подписка:\n\n"
         f"ID: {sub_id}\n"
-        f"TG: {telegram_user_id}\n"
+        f"TG: {tg_display}\n"
         f"IP: {vpn_ip}\n"
         f"active={active}\n"
         f"до {expires_str}\n"
@@ -256,6 +351,7 @@ async def cmd_admin_last(message: Message) -> None:
         f"/admin_deactivate {sub_id}\n"
         f"/admin_delete {sub_id}"
     )
+
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -307,6 +403,7 @@ async def cmd_admin_sub(message: Message) -> None:
         return
 
     telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
     vpn_ip = sub.get("vpn_ip")
     active = sub.get("active")
     expires_at = sub.get("expires_at")
@@ -317,10 +414,15 @@ async def cmd_admin_sub(message: Message) -> None:
     else:
         expires_str = str(expires_at)
 
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
+
     text = (
         "Подписка:\n\n"
         f"ID: {sub_id}\n"
-        f"TG: {telegram_user_id}\n"
+        f"TG: {tg_display}\n"
         f"IP: {vpn_ip}\n"
         f"active={active}\n"
         f"до {expires_str}\n"
@@ -330,6 +432,7 @@ async def cmd_admin_sub(message: Message) -> None:
         f"/admin_deactivate {sub_id}\n"
         f"/admin_delete {sub_id}"
     )
+
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -364,37 +467,156 @@ async def cmd_admin_list(message: Message) -> None:
         await message.answer("Эта команда доступна только администратору.")
         return
 
-    # Берём последние 30 подписок, чтобы не упереться в лимит длины сообщения
+    # Берём последние 30 подписок
     subs = db.get_last_subscriptions(limit=30)
     if not subs:
         await message.answer("Подписок в базе пока нет.")
         return
 
-    lines = []
+    keyboard_rows = []
+
     for sub in subs:
         sub_id = sub.get("id")
         telegram_user_id = sub.get("telegram_user_id")
+        telegram_user_name = sub.get("telegram_user_name")
         vpn_ip = sub.get("vpn_ip")
         active = sub.get("active")
         expires_at = sub.get("expires_at")
-        last_event_name = sub.get("last_event_name")
 
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            expires_str = expires_at.strftime("%Y-%m-%d")
         else:
             expires_str = str(expires_at)
 
-        line = (
-            f"ID: {sub_id} | TG: {telegram_user_id} | IP: {vpn_ip} | "
-            f"active={active} | до {expires_str} | event={last_event_name}"
-        )
-        lines.append(line)
+        if telegram_user_name:
+            tg_display = f"{telegram_user_id} ({telegram_user_name})"
+        else:
+            tg_display = str(telegram_user_id)
 
-    text = "Последние подписки:\n\n" + "\n".join(lines)
+        ip_display = vpn_ip if vpn_ip else "-"
+
+        status_text = "активна" if active else "неактивна"
+
+        # строка 1: ID + TG
+        line1 = f"ID {sub_id} | TG {tg_display}"
+        # строка 2: IP + дата + статус
+        line2 = f"IP {ip_display} | до {expires_str} | {status_text}"
+
+        # первая кнопка — ID и TG
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=line1,
+                    callback_data=f"adminlist:sub:{sub_id}",
+                )
+            ]
+        )
+        # вторая кнопка — IP, дата, статус
+        keyboard_rows.append(
+            [
+                InlineKeyboardButton(
+                    text=line2,
+                    callback_data=f"adminlist:sub:{sub_id}",
+                )
+            ]
+        )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+
     await message.answer(
-        text,
+        "Последние подписки (нажми на нужную, чтобы открыть подробности):",
+        reply_markup=keyboard,
         disable_web_page_preview=True,
     )
+
+
+
+@router.callback_query(F.data.startswith("adminlist:sub:"))
+async def admin_list_sub_details(callback: CallbackQuery) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, sub_id_str = parts
+
+    try:
+        sub_id = int(sub_id_str)
+    except ValueError:
+        await callback.answer("Некорректный ID.", show_alert=True)
+        return
+
+    sub = db.get_subscription_by_id(sub_id=sub_id)
+    if not sub:
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+
+    telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
+    vpn_ip = sub.get("vpn_ip")
+    active = sub.get("active")
+    expires_at = sub.get("expires_at")
+    last_event_name = sub.get("last_event_name")
+
+    if isinstance(expires_at, datetime):
+        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    else:
+        expires_str = str(expires_at)
+
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
+
+    text = (
+        "Подписка:\n\n"
+        f"ID: {sub_id}\n"
+        f"TG: {tg_display}\n"
+        f"IP: {vpn_ip}\n"
+        f"active={active}\n"
+        f"до {expires_str}\n"
+        f"event={last_event_name}\n\n"
+        "Можно управлять этой подпиской кнопками ниже или командами:\n"
+        f"/admin_activate {sub_id}\n"
+        f"/admin_deactivate {sub_id}\n"
+        f"/admin_delete {sub_id}"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Активировать",
+                    callback_data=f"adm:act:{sub_id}",
+                ),
+                InlineKeyboardButton(
+                    text="⛔ Деактивировать",
+                    callback_data=f"adm:deact:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"adm:del:{sub_id}",
+                )
+            ],
+        ]
+    )
+
+    await callback.message.answer(
+        text,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+    await callback.answer()
+ 
 
 @router.message(Command("add_sub"))
 async def cmd_add_sub(message: Message, state: FSMContext) -> None:
@@ -418,10 +640,12 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
         return
 
     target_id = None
+    target_username = None
 
     # 1) Пересланное сообщение от пользователя
     if message.forward_from and message.forward_from.id:
         target_id = message.forward_from.id
+        target_username = message.forward_from.username
     # 2) Просто числовой Telegram ID
     elif message.text and message.text.isdigit():
         try:
@@ -437,7 +661,11 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
         )
         return
 
-    await state.update_data(target_telegram_user_id=target_id)
+    await state.update_data(
+        target_telegram_user_id=target_id,
+        target_telegram_user_name=target_username,
+    )
+
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -465,12 +693,24 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
     )
 
     await state.set_state(AdminAddSub.waiting_for_period)
+
+    if target_username:
+        user_line = (
+            f"Определён пользователь: <code>{target_id}</code> "
+            f"(@{target_username}).\n\n"
+        )
+    else:
+        user_line = (
+            f"Определён пользователь с TG ID: <code>{target_id}</code>.\n\n"
+        )
+
     await message.answer(
-        f"Определён пользователь с TG ID: <code>{target_id}</code>.\n\n"
-        "Теперь выбери срок подписки:",
+        user_line + "Теперь выбери срок подписки:",
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
+
+
 
 @router.message(Command("admin_deactivate"))
 async def cmd_admin_deactivate(message: Message) -> None:
@@ -510,15 +750,22 @@ async def cmd_admin_deactivate(message: Message) -> None:
             )
 
     telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
     vpn_ip = sub.get("vpn_ip")
+
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
 
     await message.answer(
         f"Подписка с ID {sub_id} деактивирована.\n"
-        f"Пользователь TG: {telegram_user_id}\n"
+        f"Пользователь TG: {tg_display}\n"
         f"VPN IP: {vpn_ip}\n"
         f"Peer в WireGuard удалён (или его не было).",
         disable_web_page_preview=True,
     )
+
     
 @router.message(Command("admin_activate"))
 async def cmd_admin_activate(message: Message) -> None:
@@ -548,6 +795,7 @@ async def cmd_admin_activate(message: Message) -> None:
     pub_key = sub.get("wg_public_key")
     vpn_ip = sub.get("vpn_ip")
     telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
 
     if not pub_key or not vpn_ip:
         await message.answer("У подписки нет wg_public_key или vpn_ip, не могу добавить peer.")
@@ -580,9 +828,14 @@ async def cmd_admin_activate(message: Message) -> None:
         )
         return
 
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
+
     await message.answer(
         f"Подписка с ID {sub_id} активирована.\n"
-        f"Пользователь TG: {telegram_user_id}\n"
+        f"Пользователь TG: {tg_display}\n"
         f"VPN IP: {vpn_ip}\n"
         f"Peer в WireGuard добавлен.",
         disable_web_page_preview=True,
@@ -614,6 +867,7 @@ async def cmd_admin_delete(message: Message) -> None:
     pub_key = sub.get("wg_public_key")
     vpn_ip = sub.get("vpn_ip")
     telegram_user_id = sub.get("telegram_user_id")
+    telegram_user_name = sub.get("telegram_user_name")
 
     if pub_key:
         try:
@@ -635,13 +889,19 @@ async def cmd_admin_delete(message: Message) -> None:
         )
         return
 
+    if telegram_user_name:
+        tg_display = f"{telegram_user_id} ({telegram_user_name})"
+    else:
+        tg_display = str(telegram_user_id)
+
     await message.answer(
         f"Подписка с ID {sub_id} полностью удалена.\n"
-        f"Пользователь TG: {telegram_user_id}\n"
+        f"Пользователь TG: {tg_display}\n"
         f"VPN IP: {vpn_ip}\n"
         f"Peer в WireGuard удалён (если был).",
         disable_web_page_preview=True,
     )
+
     
 @router.callback_query(AdminAddSub.waiting_for_period, F.data.startswith("addsub:period:"))
 async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext) -> None:
@@ -674,8 +934,19 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         await callback.answer("Неизвестный срок подписки.", show_alert=True)
         return
 
+    # убираем инлайн-кнопки выбора срока с исходного сообщения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.error(
+            "[TelegramAdmin] Failed to clear inline keyboard for addsub period: %s",
+            repr(e),
+        )
+
     state_data = await state.get_data()
+
     target_id = state_data.get("target_telegram_user_id")
+    target_username = state_data.get("target_telegram_user_name")
     if not target_id:
         await callback.answer("Не удалось получить данные пользователя, начни /add_sub заново.", show_alert=True)
         await state.clear()
@@ -720,6 +991,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         db.insert_subscription(
             tribute_user_id=0,
             telegram_user_id=target_id,
+            telegram_user_name=target_username,
             subscription_id=0,
             period_id=0,
             period=f"admin_{period_code}",
@@ -731,6 +1003,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             expires_at=expires_at,
             event_name="admin_manual_add",
         )
+
         log.info(
             "[DB] Inserted manual subscription for tg_id=%s vpn_ip=%s expires_at=%s",
             target_id,
@@ -774,12 +1047,20 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         )
 
     # Сообщаем админу
+    if target_username:
+        user_line = (
+            f"Пользователь TG: <code>{target_id}</code> "
+            f"(@{target_username})\n"
+        )
+    else:
+        user_line = f"Пользователь TG: <code>{target_id}</code>\n"
+
     text = (
         "✅ Ручная подписка создана.\n\n"
-        f"Пользователь TG: <code>{target_id}</code>\n"
-        f"VPN IP: <code>{client_ip}</code>\n"
-        f"Срок: <b>{period_label}</b>\n"
-        f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</b>"
+        + user_line
+        + f"VPN IP: <code>{client_ip}</code>\n"
+        + f"Срок: <b>{period_label}</b>\n"
+        + f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</b>"
     )
     await callback.message.answer(
         text,
@@ -788,10 +1069,19 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
 
     await callback.answer("Подписка выдана.")
     await state.clear()
+
     
 @router.callback_query(F.data.startswith("admcmd:"))
 async def admin_cmd_inline(callback: CallbackQuery, state: FSMContext) -> None:
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+
+    # логируем, кого считаем админом и кто нажал кнопку
+    log.info(
+        "[AdminInline admcmd] admin_id=%s callback_from_user_id=%s",
+        admin_id,
+        callback.from_user.id if callback.from_user else None,
+    )
+
     if callback.from_user is None or callback.from_user.id != admin_id:
         await callback.answer("Эта кнопка только для администратора.", show_alert=True)
         return
@@ -803,6 +1093,7 @@ async def admin_cmd_inline(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     _, action = parts
+
 
     if action == "info":
         await callback.message.answer(
@@ -881,17 +1172,24 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
                 )
 
         telegram_user_id = sub.get("telegram_user_id")
+        telegram_user_name = sub.get("telegram_user_name")
         vpn_ip = sub.get("vpn_ip")
+
+        if telegram_user_name:
+            tg_display = f"{telegram_user_id} ({telegram_user_name})"
+        else:
+            tg_display = str(telegram_user_id)
 
         text = (
             f"Подписка с ID {sub_id} деактивирована.\n"
-            f"Пользователь TG: {telegram_user_id}\n"
+            f"Пользователь TG: {tg_display}\n"
             f"VPN IP: {vpn_ip}\n"
             f"Peer в WireGuard удалён (или его не было)."
         )
         await callback.message.answer(text)
         await callback.answer("Подписка деактивирована.")
         return
+
 
     # АКТИВАЦИЯ
     if action == "act":
@@ -906,10 +1204,16 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         pub_key = sub.get("wg_public_key")
         vpn_ip = sub.get("vpn_ip")
         telegram_user_id = sub.get("telegram_user_id")
+        telegram_user_name = sub.get("telegram_user_name")
 
         if not pub_key or not vpn_ip:
             await callback.answer("Нет wg_public_key или vpn_ip, не могу добавить peer.", show_alert=True)
             return
+
+        if telegram_user_name:
+            tg_display = f"{telegram_user_id} ({telegram_user_name})"
+        else:
+            tg_display = str(telegram_user_id)
 
         allowed_ip = f"{vpn_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
 
@@ -939,13 +1243,14 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
 
         text = (
             f"Подписка с ID {sub_id} активирована.\n"
-            f"Пользователь TG: {telegram_user_id}\n"
+            f"Пользователь TG: {tg_display}\n"
             f"VPN IP: {vpn_ip}\n"
             f"Peer в WireGuard добавлен."
         )
         await callback.message.answer(text)
         await callback.answer("Подписка активирована.")
         return
+
 
     # УДАЛЕНИЕ
     if action == "del":
@@ -957,6 +1262,7 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         pub_key = sub.get("wg_public_key")
         vpn_ip = sub.get("vpn_ip")
         telegram_user_id = sub.get("telegram_user_id")
+        telegram_user_name = sub.get("telegram_user_name")
 
         if pub_key:
             try:
@@ -977,15 +1283,21 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
             )
             return
 
+        if telegram_user_name:
+            tg_display = f"{telegram_user_id} ({telegram_user_name})"
+        else:
+            tg_display = str(telegram_user_id)
+
         text = (
             f"Подписка с ID {sub_id} полностью удалена.\n"
-            f"Пользователь TG: {telegram_user_id}\n"
+            f"Пользователь TG: {tg_display}\n"
             f"VPN IP: {vpn_ip}\n"
             f"Peer в WireGuard удалён (если был)."
         )
         await callback.message.answer(text)
         await callback.answer("Подписка удалена.")
         return
+
 
     await callback.answer("Неизвестное действие.", show_alert=True)
 
@@ -996,8 +1308,10 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="status", description="Статус VPN-подписки"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="support", description="Связаться с поддержкой"),
+        BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 async def auto_deactivate_expired_subscriptions() -> None:
     """

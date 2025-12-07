@@ -143,3 +143,23 @@ async def send_text_message(
         await bot.send_message(chat_id=telegram_user_id, text=text)
     finally:
         await bot.session.close()
+
+
+async def get_telegram_username(
+    telegram_user_id: int,
+) -> Optional[str]:
+    """
+    Пытаемся получить username пользователя по его telegram_user_id
+    через Telegram Bot API.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        chat = await bot.get_chat(chat_id=telegram_user_id)
+        username = getattr(chat, "username", None)
+        return username
+    except Exception as e:
+        # Логировать можно здесь, но чтобы не плодить логгер, оставим тихо.
+        # При желании можешь добавить логирование.
+        return None
+    finally:
+        await bot.session.close()

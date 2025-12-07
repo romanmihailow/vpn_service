@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: maxnet_vpn_bot
+    restart: always
+
+    # прокидываем .env внутрь контейнера
+    env_file:
+      - .env
+
+    # если логгер пишет в файлы — можно сохранить их снаружи
+    volumes:
+      - ./logs:/app/logs
+
+      # опционально: чтобы контейнер видел те же конфиги WireGuard, что и хост
+      - /etc/wireguard:/etc/wireguard:rw
+
+    # чтобы wg внутри контейнера управлял интерфейсами хоста
+    network_mode: host
+    cap_add:
+      - NET_ADMIN

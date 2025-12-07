@@ -30,8 +30,10 @@ def init_db() -> None:
         id SERIAL PRIMARY KEY,
         tribute_user_id BIGINT NOT NULL,
         telegram_user_id BIGINT NOT NULL,
+        telegram_user_name TEXT,
         subscription_id BIGINT NOT NULL,
         period_id BIGINT NOT NULL,
+
         period VARCHAR(64) NOT NULL,
         channel_id BIGINT NOT NULL,
         channel_name TEXT NOT NULL,
@@ -113,6 +115,7 @@ def get_subscription_by_tribute_and_subscription(
 def insert_subscription(
     tribute_user_id: int,
     telegram_user_id: int,
+    telegram_user_name: Optional[str],
     subscription_id: int,
     period_id: int,
     period: str,
@@ -128,6 +131,7 @@ def insert_subscription(
     INSERT INTO vpn_subscriptions (
         tribute_user_id,
         telegram_user_id,
+        telegram_user_name,
         subscription_id,
         period_id,
         period,
@@ -140,7 +144,7 @@ def insert_subscription(
         active,
         last_event_name
     ) VALUES (
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s
+        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s
     );
     """
     with get_conn() as conn:
@@ -150,6 +154,7 @@ def insert_subscription(
                 (
                     tribute_user_id,
                     telegram_user_id,
+                    telegram_user_name,
                     subscription_id,
                     period_id,
                     period,
@@ -163,6 +168,7 @@ def insert_subscription(
                 ),
             )
         conn.commit()
+
 
 
 def update_subscription_expiration(

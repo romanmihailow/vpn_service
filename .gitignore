@@ -10,3 +10,5 @@ __pycache__/
 *.log
 app/__pycache__/
 secrets/
+.dockerignore
+README cmd.md
