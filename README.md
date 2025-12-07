@@ -1,7 +1,4 @@
 
-
-
-
 MaxNet VPN — backend + Telegram-бот
 Сервис для автоматической выдачи VPN-ключей WireGuard через платежи в Tribute и через ручную выдачу из админки Telegram.
 Состав проекта
