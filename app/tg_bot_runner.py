@@ -660,12 +660,31 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
     target_id = None
     target_username = None
 
-    # 1) Пересланное сообщение от пользователя
-    if message.forward_from and message.forward_from.id:
+    # 1) Админ ответил на сообщение пользователя (reply в чате, где есть бот и пользователь)
+    if (
+        message.reply_to_message
+        and message.reply_to_message.from_user
+        and not message.reply_to_message.from_user.is_bot
+    ):
+        target_id = message.reply_to_message.from_user.id
+        target_username = message.reply_to_message.from_user.username
+        log.info(
+            "[AdminAddSub] target from reply: id=%s username=%s",
+            target_id,
+            target_username,
+        )
+
+    # 2) Пересланное сообщение от пользователя
+    if target_id is None and message.forward_from and message.forward_from.id:
         target_id = message.forward_from.id
         target_username = message.forward_from.username
+        log.info(
+            "[AdminAddSub] target from forward: id=%s username=%s",
+            target_id,
+            target_username,
+        )
 
-    # 2) Попробуем вытащить числовой Telegram ID из текста сообщения
+    # 3) Попробуем вытащить числовой Telegram ID из текста сообщения
     if target_id is None and message.text:
         raw_text = message.text.strip()
 
@@ -673,6 +692,7 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
         if raw_text.isdigit():
             try:
                 target_id = int(raw_text)
+                log.info("[AdminAddSub] target from pure digits text: %s", target_id)
             except ValueError:
                 target_id = None
         else:
@@ -683,13 +703,15 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
             if digits_only:
                 try:
                     target_id = int(digits_only)
+                    log.info("[AdminAddSub] target from mixed text digits: %s", target_id)
                 except ValueError:
                     target_id = None
 
     if not target_id:
         await message.answer(
             "Не смог определить пользователя.\n\n"
-            "Перешли сообщение от пользователя или отправь его числовой Telegram ID.",
+            "Перешли сообщение от пользователя, ответь на его сообщение в чате с ботом "
+            "или отправь его числовой Telegram ID.",
             disable_web_page_preview=True,
         )
         return
@@ -742,6 +764,7 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
+
 
 
 
