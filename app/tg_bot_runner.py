@@ -227,7 +227,7 @@ async def cmd_support(message: Message) -> None:
 async def cmd_my_id(message: Message) -> None:
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
     await message.answer(
-        f"Твой Telegram ID: <code>{message.from_user.id}</code>\n"
+        f"Твой Telegram ID: <code>{message.from_user.id}</code>\n",
         #f"ADMIN_TELEGRAM_ID из .env: <code>{admin_id}</code>",
         disable_web_page_preview=True,
     )
