@@ -1083,10 +1083,34 @@ async def cmd_admin_delete(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("demo:"))
 async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    # Администраторский ID
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
-    if callback.from_user is None or callback.from_user.id != admin_id:
-        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+
+    # Получаем данные из callback
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
         return
+
+    # Извлекаем ID пользователя, который запросил демо-доступ
+    user_id = int(parts[2])
+
+    # Создаём текст запроса для отправки админу
+    request_text = f"Запрос демо-доступа от пользователя {user_id}.\n\nПользователь запросил демо-доступ."
+
+    # Отправляем запрос админу
+    try:
+        await callback.bot.send_message(
+            chat_id=admin_id,
+            text=request_text,
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Твой запрос отправлен админу. Ожидай решения.")
+    except Exception as e:
+        log.error(f"[DemoRequest] Failed to send demo request to admin {admin_id}: {repr(e)}")
+        await callback.answer("Не удалось отправить запрос админу. Попробуй позже.", show_alert=True)
+
 
     data = callback.data or ""
     parts = data.split(":")
