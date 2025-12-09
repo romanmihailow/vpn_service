@@ -38,8 +38,13 @@ class AdminAddSub(StatesGroup):
     waiting_for_period = State()
 
 
+class DemoRequest(StatesGroup):
+    waiting_for_message = State()
+
+
 # Кнопка "Подключить VPN" с твоей ссылкой Tribute
 SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
+
     inline_keyboard=[
         [
             InlineKeyboardButton(
@@ -223,7 +228,7 @@ async def cmd_my_id(message: Message) -> None:
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
     await message.answer(
         f"Твой Telegram ID: <code>{message.from_user.id}</code>\n"
-        f"ADMIN_TELEGRAM_ID из .env: <code>{admin_id}</code>",
+        #f"ADMIN_TELEGRAM_ID из .env: <code>{admin_id}</code>",
         disable_web_page_preview=True,
     )
 
@@ -234,6 +239,17 @@ async def cmd_subscription(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.message(Command("demo"))
+async def cmd_demo(message: Message, state: FSMContext) -> None:
+    await state.set_state(DemoRequest.waiting_for_message)
+    await message.answer(
+        "Ты можешь запросить тестовый демо-доступ к MaxNet VPN.\n\n"
+        "Напиши в одном сообщении, зачем тебе нужен доступ и как планируешь использовать VPN "
+        "(например: «хочу протестировать скорость и стабильность», «нужно временно для поездки», "
+        "«показать сервис друзьям»).\n\n"
+        "Я перешлю твой текст админу, и он решит, выдавать ли демо-доступ.",
+        disable_web_page_preview=True,
+    )
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
@@ -268,6 +284,95 @@ async def cmd_status(message: Message) -> None:
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    
+@router.message(DemoRequest.waiting_for_message)
+async def demo_request_get_message(message: Message, state: FSMContext) -> None:
+    user = message.from_user
+    if user is None:
+        await message.answer(
+            "Не удалось определить твой аккаунт. Попробуй ещё раз позже.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if admin_id == 0:
+        await message.answer(
+            "Сейчас запросы на демо-доступ временно недоступны. Попробуй позже или оформи подписку через Tribute.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    user_id = user.id
+    username = user.username
+    full_name = user.full_name
+
+    request_text = message.text or ""
+    request_text = request_text.strip()
+    if not request_text:
+        request_text = "— (пустое сообщение)"
+
+    if len(request_text) > 1000:
+        request_text = request_text[:1000] + "…"
+
+    if username:
+        username_line = f"@{username}"
+    else:
+        username_line = "—"
+
+    admin_text = (
+        "⚡️ <b>Запрос демо-доступа к MaxNet VPN</b>\n\n"
+        f"Пользователь:\n"
+        f"• Имя: <code>{full_name}</code>\n"
+        f"• Username: <code>{username_line}</code>\n"
+        f"• Telegram ID: <code>{user_id}</code>\n\n"
+        f"Сообщение пользователя:\n"
+        f"<code>{request_text}</code>\n\n"
+        "Выдать этому пользователю демо-доступ?"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Выдать демо-доступ",
+                    callback_data=f"demo:approve:{user_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отказать",
+                    callback_data=f"demo:deny:{user_id}",
+                ),
+            ],
+        ]
+    )
+
+    try:
+        await message.bot.send_message(
+            chat_id=admin_id,
+            text=admin_text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+    except Exception as e:
+        log.error("[Demo] Failed to send demo request to admin %s: %s", admin_id, repr(e))
+        await message.answer(
+            "Не удалось отправить запрос админу. Попробуй позже или оформи подписку через Tribute.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    await message.answer(
+        "Спасибо! Я отправил твой запрос на демо-доступ админу.\n\n"
+        "Когда он примет решение, я пришлю сюда уведомление.",
+        disable_web_page_preview=True,
+    )
+
+    await state.clear()  
     
 @router.message(Command("admin_info"))
 async def cmd_admin_info(message: Message) -> None:
@@ -972,6 +1077,114 @@ async def cmd_admin_delete(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.callback_query(F.data.startswith("demo:"))
+async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, action, user_id_str = parts
+
+    try:
+        target_id = int(user_id_str)
+    except ValueError:
+        await callback.answer("Некорректный ID пользователя.", show_alert=True)
+        return
+
+    if action == "approve":
+        target_username = None
+        try:
+            chat = await callback.bot.get_chat(target_id)
+            target_username = getattr(chat, "username", None)
+        except Exception as e:
+            log.error("[Demo] Failed to fetch username for %s: %s", target_id, repr(e))
+
+        await state.set_state(AdminAddSub.waiting_for_period)
+        await state.update_data(
+            target_telegram_user_id=target_id,
+            target_telegram_user_name=target_username,
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="1 месяц",
+                        callback_data="addsub:period:1m",
+                    ),
+                    InlineKeyboardButton(
+                        text="3 месяца",
+                        callback_data="addsub:period:3m",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="6 месяцев",
+                        callback_data="addsub:period:6m",
+                    ),
+                    InlineKeyboardButton(
+                        text="1 год",
+                        callback_data="addsub:period:1y",
+                    ),
+                ],
+            ]
+        )
+
+        if target_username:
+            user_line = (
+                f"Пользователь: <code>{target_id}</code> (@{target_username}).\n\n"
+            )
+        else:
+            user_line = (
+                f"Пользователь с TG ID: <code>{target_id}</code>.\n\n"
+            )
+
+        text = (
+            "Запрос демо-доступа одобрен.\n\n"
+            + user_line
+            + "Выбери срок демо-подписки:"
+        )
+
+        await callback.message.answer(
+            text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Выбери срок демо-подписки.")
+        return
+
+    if action == "deny":
+        deny_text = (
+            "Привет!\n\n"
+            "Спасибо за интерес к MaxNet VPN. "
+            "К сожалению, в текущем месяце все бесплатные демо-доступы уже израсходованы.\n\n"
+            "Ты можешь оформить платную подписку через кнопку «Подключить VPN» в боте "
+            "или вернуться позже — возможно, появятся новые свободные слоты."
+        )
+        try:
+            await callback.bot.send_message(
+                chat_id=target_id,
+                text=deny_text,
+                disable_web_page_preview=True,
+            )
+        except Exception as e:
+            log.error("[Demo] Failed to send deny message to user %s: %s", target_id, repr(e))
+
+        await callback.message.answer(
+            f"Отказ по демо-доступу для пользователя <code>{target_id}</code> отправлен.",
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Отказ по демо-доступу отправлен пользователю.")
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
     
 @router.callback_query(AdminAddSub.waiting_for_period, F.data.startswith("addsub:period:"))
 async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1377,10 +1590,12 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Инструкция по подключению"),
         BotCommand(command="status", description="Статус VPN-подписки"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
+        BotCommand(command="demo", description="Запросить демо-доступ"),
         BotCommand(command="support", description="Связаться с поддержкой"),
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 async def auto_deactivate_expired_subscriptions() -> None:
