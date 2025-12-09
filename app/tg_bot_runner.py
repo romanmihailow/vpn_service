@@ -1082,32 +1082,56 @@ async def cmd_admin_delete(message: Message) -> None:
     )
 
 # Это исправленный обработчик для кнопки демо-запроса
-@router.callback_query(F.data == "demo_request")
+@router.callback_query(F.data.startswith("demo:"))
 async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    # Получаем ID администратора
-    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
-
-    # Проверяем, что запрос пришел от пользователя, а не бота
-    if callback.from_user is None or callback.from_user.id == admin_id:
-        await callback.answer("Этот запрос только для обычных пользователей.", show_alert=True)
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
         return
 
-    # Формируем текст для отправки админу
-    user_id = callback.from_user.id
-    user_name = callback.from_user.username or "Без username"
-    message = f"Запрос демо-доступа от пользователя {user_name} (ID: {user_id})."
-
+    action, _, user_id_str = parts
     try:
-        # Отправляем запрос админу
-        await callback.bot.send_message(
-            chat_id=admin_id,
-            text=message,
-            disable_web_page_preview=True,
+        user_id = int(user_id_str)
+    except ValueError:
+        await callback.answer("Некорректный ID пользователя.", show_alert=True)
+        return
+
+    if action == "approve":
+        # Если админ одобрил, показываем выбор периода
+        await state.set_state(AdminAddSub.waiting_for_period)
+        await state.update_data(
+            target_telegram_user_id=user_id,
         )
-        await callback.answer("Твой запрос отправлен админу. Ожидай решения.")
-    except Exception as e:
-        log.error(f"[DemoRequest] Failed to send demo request to admin {admin_id}: {repr(e)}")
-        await callback.answer("Не удалось отправить запрос админу. Попробуй позже.", show_alert=True)
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="1 месяц", callback_data="addsub:period:1m"),
+                    InlineKeyboardButton(text="3 месяца", callback_data="addsub:period:3m"),
+                ],
+                [
+                    InlineKeyboardButton(text="6 месяцев", callback_data="addsub:period:6m"),
+                    InlineKeyboardButton(text="1 год", callback_data="addsub:period:1y"),
+                ]
+            ]
+        )
+        await callback.message.answer(
+            "Запрос демо-доступа одобрен. Выберите срок подписки.",
+            reply_markup=keyboard,
+        )
+    elif action == "deny":
+        # Если админ отказал, отправляем сообщение пользователю
+        deny_text = "Лимит на демо-доступы в этом месяце исчерпан. Попробуйте позже."
+        try:
+            await callback.bot.send_message(user_id, deny_text)
+        except Exception as e:
+            log.error("[DemoRequest] Failed to send deny message to user %s: %s", user_id, repr(e))
+
+        await callback.answer("Отказ по демо-доступу отправлен пользователю.")
+    await callback.answer()
+
+
 
 
 
@@ -1215,18 +1239,67 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
     
 @router.callback_query(AdminAddSub.waiting_for_period, F.data.startswith("addsub:period:"))
 async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext) -> None:
-    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
-    if callback.from_user is None or callback.from_user.id != admin_id:
-        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
-        return
-
-    data = callback.data or ""
+    data = callback.data
     parts = data.split(":")
     if len(parts) != 3:
         await callback.answer("Некорректные данные кнопки.", show_alert=True)
         return
 
     _, _, period_code = parts
+
+    # Определяем период подписки
+    if period_code == "1m":
+        days = 30
+        period_label = "1 месяц"
+    elif period_code == "3m":
+        days = 90
+        period_label = "3 месяца"
+    elif period_code == "6m":
+        days = 180
+        period_label = "6 месяцев"
+    elif period_code == "1y":
+        days = 365
+        period_label = "1 год"
+    else:
+        await callback.answer("Неизвестный срок подписки.", show_alert=True)
+        return
+
+    # Получаем данные о пользователе
+    state_data = await state.get_data()
+    target_id = state_data.get("target_telegram_user_id")
+    now = datetime.utcnow()
+    expires_at = now + timedelta(days=days)
+
+    # Генерируем ключи и IP
+    client_priv, client_pub = wg.generate_keypair()
+    client_ip = wg.generate_client_ip()
+    allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+    # Добавляем peer в WireGuard
+    try:
+        log.info("[TelegramAdmin] Add peer (manual) pubkey=%s ip=%s for tg_id=%s", client_pub, allowed_ip, target_id)
+        wg.add_peer(public_key=client_pub, allowed_ip=allowed_ip, telegram_user_id=target_id)
+    except Exception as e:
+        log.error("[TelegramAdmin] Failed to add peer to WireGuard for tg_id=%s: %s", target_id, repr(e))
+        await callback.answer("Ошибка при добавлении peer в WireGuard. Подписка не создана.", show_alert=True)
+        return
+
+    # Записываем подписку в базу
+    db.insert_subscription(
+        telegram_user_id=target_id,
+        vpn_ip=client_ip,
+        wg_private_key=client_priv,
+        wg_public_key=client_pub,
+        expires_at=expires_at,
+    )
+
+    # Генерируем конфиг и отправляем пользователю
+    config_text = wg.build_client_config(client_private_key=client_priv, client_ip=client_ip)
+    await send_vpn_config_to_user(target_id, config_text)
+
+    await callback.message.answer(f"Подписка для {target_id} с сроком {period_label} создана.")
+    await callback.answer()
+
 
     if period_code == "1m":
         days = 30
