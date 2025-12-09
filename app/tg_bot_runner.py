@@ -707,14 +707,28 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
                 except ValueError:
                     target_id = None
 
+    # 4) Спецкейс: forward_sender_name есть, а forward_from нет — у пользователя включена приватность пересылки
+    if (
+        target_id is None
+        and message.forward_from is None
+        and getattr(message, "forward_sender_name", None)
+    ):
+        log.info(
+            "[AdminAddSub] forward_sender_name=%r, но forward_from=None — включена приватность пересылки, id недоступен",
+            message.forward_sender_name,
+        )
+
     if not target_id:
         await message.answer(
             "Не смог определить пользователя.\n\n"
-            "Перешли сообщение от пользователя, ответь на его сообщение в чате с ботом "
-            "или отправь его числовой Telegram ID.",
+            "Возможные причины:\n"
+            "• У пользователя включена приватность пересланных сообщений — бот не видит его ID.\n"
+            "• Либо не было пересланного сообщения / числового ID.\n\n"
+            "Попроси пользователя написать боту (например, /start или /my_id) и перешли мне его числовой Telegram ID.",
             disable_web_page_preview=True,
         )
         return
+
 
     await state.update_data(
         target_telegram_user_id=target_id,
