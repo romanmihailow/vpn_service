@@ -42,18 +42,22 @@ class DemoRequest(StatesGroup):
     waiting_for_message = State()
 
 
-# Кнопка "Подключить VPN" с твоей ссылкой Tribute
+# Кнопка "Подключить VPN" и кнопка "Запросить демо доступ"
 SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
-
     inline_keyboard=[
         [
             InlineKeyboardButton(
                 text="🔐 Подключить VPN",
                 url="https://t.me/tribute/app?startapp=dAUr",
-            )
+            ),
+            InlineKeyboardButton(
+                text="🎁 Запросить демо доступ",
+                callback_data="demo:request",
+            ),
         ]
     ]
 )
+
 
 
 START_TEXT = (
