@@ -664,12 +664,27 @@ async def admin_add_sub_get_target(message: Message, state: FSMContext) -> None:
     if message.forward_from and message.forward_from.id:
         target_id = message.forward_from.id
         target_username = message.forward_from.username
-    # 2) Просто числовой Telegram ID
-    elif message.text and message.text.isdigit():
-        try:
-            target_id = int(message.text)
-        except ValueError:
-            target_id = None
+
+    # 2) Попробуем вытащить числовой Telegram ID из текста сообщения
+    if target_id is None and message.text:
+        raw_text = message.text.strip()
+
+        # вариант "чисто цифры"
+        if raw_text.isdigit():
+            try:
+                target_id = int(raw_text)
+            except ValueError:
+                target_id = None
+        else:
+            # иногда админ копирует строку вида:
+            # "Твой Telegram ID: 123456789"
+            # вытащим из неё все цифры подряд
+            digits_only = "".join(ch for ch in raw_text if ch.isdigit())
+            if digits_only:
+                try:
+                    target_id = int(digits_only)
+                except ValueError:
+                    target_id = None
 
     if not target_id:
         await message.answer(
