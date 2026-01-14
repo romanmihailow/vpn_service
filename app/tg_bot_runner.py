@@ -255,6 +255,23 @@ async def cmd_demo(message: Message, state: FSMContext) -> None:
         disable_web_page_preview=True,
     )
 
+
+@router.callback_query(F.data == "demo_request")
+async def demo_request_button(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await state.set_state(DemoRequest.waiting_for_message)
+    await callback.message.answer(
+        "Ты можешь запросить тестовый демо-доступ к MaxNet VPN.\n\n"
+        "Напиши в одном сообщении, зачем тебе нужен доступ и как планируешь использовать VPN "
+        "(например: «хочу протестировать скорость и стабильность», «нужно временно для поездки», "
+        "«показать сервис друзьям»).\n\n"
+        "Я перешлю твой текст админу, и он решит, выдавать ли демо-доступ.",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
     user_id = message.from_user.id
@@ -1081,59 +1098,13 @@ async def cmd_admin_delete(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
-# Это исправленный обработчик для кнопки демо-запроса
+# Обработчик кнопок "✅ Выдать демо-доступ" / "❌ Отказать"
 @router.callback_query(F.data.startswith("demo:"))
 async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    data = callback.data
-    parts = data.split(":")
-    if len(parts) != 3:
-        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
         return
-
-    action, _, user_id_str = parts
-    try:
-        user_id = int(user_id_str)
-    except ValueError:
-        await callback.answer("Некорректный ID пользователя.", show_alert=True)
-        return
-
-    if action == "approve":
-        # Если админ одобрил, показываем выбор периода
-        await state.set_state(AdminAddSub.waiting_for_period)
-        await state.update_data(
-            target_telegram_user_id=user_id,
-        )
-
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text="1 месяц", callback_data="addsub:period:1m"),
-                    InlineKeyboardButton(text="3 месяца", callback_data="addsub:period:3m"),
-                ],
-                [
-                    InlineKeyboardButton(text="6 месяцев", callback_data="addsub:period:6m"),
-                    InlineKeyboardButton(text="1 год", callback_data="addsub:period:1y"),
-                ]
-            ]
-        )
-        await callback.message.answer(
-            "Запрос демо-доступа одобрен. Выберите срок подписки.",
-            reply_markup=keyboard,
-        )
-    elif action == "deny":
-        # Если админ отказал, отправляем сообщение пользователю
-        deny_text = "Лимит на демо-доступы в этом месяце исчерпан. Попробуйте позже."
-        try:
-            await callback.bot.send_message(user_id, deny_text)
-        except Exception as e:
-            log.error("[DemoRequest] Failed to send deny message to user %s: %s", user_id, repr(e))
-
-        await callback.answer("Отказ по демо-доступу отправлен пользователю.")
-    await callback.answer()
-
-
-
-
 
     data = callback.data or ""
     parts = data.split(":")
@@ -1166,45 +1137,23 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(
-                        text="1 месяц",
-                        callback_data="addsub:period:1m",
-                    ),
-                    InlineKeyboardButton(
-                        text="3 месяца",
-                        callback_data="addsub:period:3m",
-                    ),
+                    InlineKeyboardButton(text="1 месяц", callback_data="addsub:period:1m"),
+                    InlineKeyboardButton(text="3 месяца", callback_data="addsub:period:3m"),
                 ],
                 [
-                    InlineKeyboardButton(
-                        text="6 месяцев",
-                        callback_data="addsub:period:6m",
-                    ),
-                    InlineKeyboardButton(
-                        text="1 год",
-                        callback_data="addsub:period:1y",
-                    ),
+                    InlineKeyboardButton(text="6 месяцев", callback_data="addsub:period:6m"),
+                    InlineKeyboardButton(text="1 год", callback_data="addsub:period:1y"),
                 ],
             ]
         )
 
         if target_username:
-            user_line = (
-                f"Пользователь: <code>{target_id}</code> (@{target_username}).\n\n"
-            )
+            user_line = f"Пользователь: <code>{target_id}</code> (@{target_username}).\n\n"
         else:
-            user_line = (
-                f"Пользователь с TG ID: <code>{target_id}</code>.\n\n"
-            )
-
-        text = (
-            "Запрос демо-доступа одобрен.\n\n"
-            + user_line
-            + "Выбери срок демо-подписки:"
-        )
+            user_line = f"Пользователь с TG ID: <code>{target_id}</code>.\n\n"
 
         await callback.message.answer(
-            text,
+            "Запрос демо-доступа одобрен.\n\n" + user_line + "Выбери срок демо-подписки:",
             reply_markup=keyboard,
             disable_web_page_preview=True,
         )
@@ -1219,6 +1168,7 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
             "Ты можешь оформить платную подписку через кнопку «Подключить VPN» в боте "
             "или вернуться позже — возможно, появятся новые свободные слоты."
         )
+
         try:
             await callback.bot.send_message(
                 chat_id=target_id,
@@ -1232,10 +1182,11 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
             f"Отказ по демо-доступу для пользователя <code>{target_id}</code> отправлен.",
             disable_web_page_preview=True,
         )
-        await callback.answer("Отказ по демо-доступу отправлен пользователю.")
+        await callback.answer("Отказ отправлен.")
         return
 
     await callback.answer("Неизвестное действие.", show_alert=True)
+
     
 @router.callback_query(AdminAddSub.waiting_for_period, F.data.startswith("addsub:period:"))
 async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1264,59 +1215,6 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         await callback.answer("Неизвестный срок подписки.", show_alert=True)
         return
 
-    # Получаем данные о пользователе
-    state_data = await state.get_data()
-    target_id = state_data.get("target_telegram_user_id")
-    now = datetime.utcnow()
-    expires_at = now + timedelta(days=days)
-
-    # Генерируем ключи и IP
-    client_priv, client_pub = wg.generate_keypair()
-    client_ip = wg.generate_client_ip()
-    allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
-
-    # Добавляем peer в WireGuard
-    try:
-        log.info("[TelegramAdmin] Add peer (manual) pubkey=%s ip=%s for tg_id=%s", client_pub, allowed_ip, target_id)
-        wg.add_peer(public_key=client_pub, allowed_ip=allowed_ip, telegram_user_id=target_id)
-    except Exception as e:
-        log.error("[TelegramAdmin] Failed to add peer to WireGuard for tg_id=%s: %s", target_id, repr(e))
-        await callback.answer("Ошибка при добавлении peer в WireGuard. Подписка не создана.", show_alert=True)
-        return
-
-    # Записываем подписку в базу
-    db.insert_subscription(
-        telegram_user_id=target_id,
-        vpn_ip=client_ip,
-        wg_private_key=client_priv,
-        wg_public_key=client_pub,
-        expires_at=expires_at,
-    )
-
-    # Генерируем конфиг и отправляем пользователю
-    config_text = wg.build_client_config(client_private_key=client_priv, client_ip=client_ip)
-    await send_vpn_config_to_user(target_id, config_text)
-
-    await callback.message.answer(f"Подписка для {target_id} с сроком {period_label} создана.")
-    await callback.answer()
-
-
-    if period_code == "1m":
-        days = 30
-        period_label = "1 месяц"
-    elif period_code == "3m":
-        days = 90
-        period_label = "3 месяца"
-    elif period_code == "6m":
-        days = 180
-        period_label = "6 месяцев"
-    elif period_code == "1y":
-        days = 365
-        period_label = "1 год"
-    else:
-        await callback.answer("Неизвестный срок подписки.", show_alert=True)
-        return
-
     # убираем инлайн-кнопки выбора срока с исходного сообщения
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -1327,9 +1225,9 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         )
 
     state_data = await state.get_data()
-
     target_id = state_data.get("target_telegram_user_id")
     target_username = state_data.get("target_telegram_user_name")
+
     if not target_id:
         await callback.answer("Не удалось получить данные пользователя, начни /add_sub заново.", show_alert=True)
         await state.clear()
@@ -1362,14 +1260,11 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             target_id,
             repr(e),
         )
-        await callback.answer(
-            "Ошибка при добавлении peer в WireGuard. Подписка не создана.",
-            show_alert=True,
-        )
+        await callback.answer("Ошибка при добавлении peer в WireGuard. Подписка не создана.", show_alert=True)
         await state.clear()
         return
 
-    # Записываем подписку в БД
+    # Записываем подписку в БД (правильная сигнатура)
     try:
         db.insert_subscription(
             tribute_user_id=0,
@@ -1399,10 +1294,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             target_id,
             repr(e),
         )
-        await callback.answer(
-            "Ошибка при записи подписки в базу. Проверь логи.",
-            show_alert=True,
-        )
+        await callback.answer("Ошибка при записи подписки в базу. Проверь логи.", show_alert=True)
         await state.clear()
         return
 
@@ -1412,6 +1304,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         client_ip=client_ip,
     )
 
+    sent_ok = True
     try:
         await send_vpn_config_to_user(
             telegram_user_id=target_id,
@@ -1423,11 +1316,13 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         )
         log.info("[Telegram] Manual config sent to %s", target_id)
     except Exception as e:
+        sent_ok = False
         log.error(
             "[Telegram] Failed to send manual config to %s: %s",
             target_id,
             repr(e),
         )
+
 
     # Сообщаем админу
     if target_username:
@@ -1438,13 +1333,23 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
     else:
         user_line = f"Пользователь TG: <code>{target_id}</code>\n"
 
+    warning = ""
+    if not sent_ok:
+        warning = (
+            "⚠️ ВАЖНО: Бот НЕ смог отправить пользователю конфиг.\n"
+            "Обычно это значит, что пользователь не нажал /start или заблокировал бота.\n\n"
+        )
+
     text = (
-        "✅ Ручная подписка создана.\n\n"
+        warning
+        + "✅ Ручная подписка создана.\n\n"
         + user_line
         + f"VPN IP: <code>{client_ip}</code>\n"
         + f"Срок: <b>{period_label}</b>\n"
         + f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</b>"
     )
+
+
     await callback.message.answer(
         text,
         disable_web_page_preview=True,
@@ -1452,6 +1357,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
 
     await callback.answer("Подписка выдана.")
     await state.clear()
+
 
     
 @router.callback_query(F.data.startswith("admcmd:"))
