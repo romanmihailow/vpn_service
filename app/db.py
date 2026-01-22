@@ -369,6 +369,27 @@ def get_max_client_ip_last_octet() -> int:
 
     return max_octet
 
+
+def is_vpn_ip_used(vpn_ip: str) -> bool:
+    """
+    Проверяет, используется ли указанный vpn_ip в активной не истёкшей подписке.
+    Возвращает True, если IP уже занят.
+    """
+    sql = """
+    SELECT 1
+    FROM vpn_subscriptions
+    WHERE vpn_ip = %s
+      AND active = TRUE
+      AND expires_at > NOW()
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (vpn_ip,))
+            row = cur.fetchone()
+            return row is not None
+
+
 def get_last_subscriptions(limit: int = 50):
     """
     Возвращает последние N подписок для админки.
@@ -409,6 +430,30 @@ def get_latest_subscription_for_telegram(
             if not row:
                 return None
             return dict(row)
+        
+
+def get_active_subscriptions_for_telegram(
+    telegram_user_id: int,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает все активные НЕ истёкшие подписки для данного Telegram-пользователя.
+    Используется для автоочистки перед выдачей нового доступа.
+    """
+    sql = """
+    SELECT *
+    FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND active = TRUE
+      AND expires_at > NOW()
+    ORDER BY expires_at DESC, id DESC;
+    """
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (telegram_user_id,))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
 
 def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
     """

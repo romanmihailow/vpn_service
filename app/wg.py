@@ -18,6 +18,25 @@ def run_cmd(cmd: list) -> str:
     )
     return result.stdout.strip()
 
+def ensure_wg_up() -> None:
+    """
+    Проверяем, что WireGuard-интерфейс поднят.
+
+    Если интерфейс wg0 не существует или не работает, выбрасываем RuntimeError.
+    """
+    try:
+        subprocess.run(
+            ["wg", "show", settings.WG_INTERFACE_NAME],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"WireGuard интерфейс {settings.WG_INTERFACE_NAME} не поднят. "
+            f"Подними его: systemctl start wg-quick@{settings.WG_INTERFACE_NAME}"
+        ) from e
+
 
 def generate_keypair() -> Tuple[str, str]:
     """
@@ -50,12 +69,32 @@ def generate_client_ip() -> str:
     """
     Берём максимум по последнему октету из БД и выдаём следующий.
     Стартовое значение берём из WG_CLIENT_IP_START (например, 10 → 10.8.0.10).
+
+    Дополнительно проверяем по БД, что сгенерированный IP не используется
+    в активных подписках (чтобы не было конфликтов при повторной выдаче).
     """
+    # Берём последний выданный октет (по всем записям в БД)
     last_from_db = db.get_max_client_ip_last_octet()
     base = max(last_from_db, settings.WG_CLIENT_IP_START - 1)
+
+    # Начинаем с base + 1, но гарантируем, что IP ещё не занят
     next_octet = base + 1
-    ip = f"{settings.WG_CLIENT_NETWORK_PREFIX}{next_octet}"
-    return ip
+
+    while True:
+        if next_octet > 254:
+            # Можно подправить верхнюю границу, если у тебя другая маска
+            raise RuntimeError("Не осталось свободных IP-адресов в пуле WireGuard")
+
+        candidate_ip = f"{settings.WG_CLIENT_NETWORK_PREFIX}{next_octet}"
+
+        # Проверяем в БД, что этот IP не используется в активной подписке
+        # ОЖИДАЕТСЯ, ЧТО В db.py ЕСТЬ ФУНКЦИЯ is_vpn_ip_used(ip: str) -> bool
+        if not db.is_vpn_ip_used(candidate_ip):
+            return candidate_ip
+
+        # Если IP занят, пробуем следующий
+        next_octet += 1
+
 
 
 def _append_peer_to_config(public_key: str, allowed_ip: str, telegram_user_id: Optional[int] = None) -> None:
@@ -148,6 +187,9 @@ def add_peer(public_key: str, allowed_ip: str, telegram_user_id: Optional[int] =
     """
     Добавляем пира в wg0 (в рантайме) + дописываем в wg0.conf.
     """
+    # Проверяем, что интерфейс WireGuard поднят
+    ensure_wg_up()
+
     cmd = [
         "wg",
         "set",
@@ -163,10 +205,14 @@ def add_peer(public_key: str, allowed_ip: str, telegram_user_id: Optional[int] =
     _append_peer_to_config(public_key, allowed_ip, telegram_user_id)
 
 
+
 def remove_peer(public_key: str) -> None:
     """
     Удаляем пира из wg0 (в рантайме) + удаляем из wg0.conf (если он там с пометкой сервиса).
     """
+    # Проверяем, что интерфейс WireGuard поднят
+    ensure_wg_up()
+
     cmd = [
         "wg",
         "set",
@@ -178,6 +224,7 @@ def remove_peer(public_key: str) -> None:
     run_cmd(cmd)
 
     _remove_peer_from_config(public_key)
+
 
 
 def build_client_config(

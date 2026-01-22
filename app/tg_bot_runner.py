@@ -23,8 +23,47 @@ from . import db
 from .bot import INSTRUCTION_TEXT, send_vpn_config_to_user
 from . import wg
 from .logger import get_logger
-
 log = get_logger()
+
+
+def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
+    """
+    Деактивирует ВСЕ активные подписки пользователя и удаляет их peer'ы из WireGuard.
+    Используется перед выдачей нового доступа.
+    """
+    active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id=telegram_user_id)
+
+    for sub in active_subs:
+        sub_id = sub.get("id")
+        pub_key = sub.get("wg_public_key")
+
+        if not sub_id:
+            continue
+
+        log.info(
+            "[AutoCleanup] Deactivate old sub_id=%s for tg_id=%s reason=%s",
+            sub_id,
+            telegram_user_id,
+            reason,
+        )
+
+        db.deactivate_subscription_by_id(
+            sub_id=sub_id,
+            event_name=reason,
+        )
+
+        if pub_key:
+            try:
+                wg.remove_peer(pub_key)
+            except Exception as e:
+                log.error(
+                    "[AutoCleanup] Failed to remove old peer pubkey=%s for sub_id=%s: %s",
+                    pub_key,
+                    sub_id,
+                    repr(e),
+                )
+
+
 
 router = Router()
 
@@ -962,7 +1001,7 @@ async def cmd_admin_deactivate(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
-    
+
 @router.message(Command("admin_activate"))
 async def cmd_admin_activate(message: Message) -> None:
     if not is_admin(message):
@@ -980,6 +1019,22 @@ async def cmd_admin_activate(message: Message) -> None:
         await message.answer("ID подписки должен быть числом.")
         return
 
+    # сначала берём подписку, чтобы узнать telegram_user_id
+    sub_before = db.get_subscription_by_id(sub_id=sub_id)
+    if not sub_before:
+        await message.answer("Подписка не найдена.")
+        return
+
+    telegram_user_id = sub_before.get("telegram_user_id")
+
+    # ⚠️ СНАЧАЛА отключаем все старые активные подписки пользователя
+    if telegram_user_id:
+        deactivate_existing_active_subscriptions(
+            telegram_user_id=telegram_user_id,
+            reason="auto_replace_admin_activate",
+        )
+
+    # теперь активируем нужную подписку
     sub = db.activate_subscription_by_id(
         sub_id=sub_id,
         event_name="admin_activate",
@@ -1040,6 +1095,7 @@ async def cmd_admin_activate(message: Message) -> None:
 
 @router.message(Command("admin_delete"))
 async def cmd_admin_delete(message: Message) -> None:
+
     if not is_admin(message):
         await message.answer("Эта команда доступна только администратору.")
         return
@@ -1236,6 +1292,12 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
     now = datetime.utcnow()
     expires_at = now + timedelta(days=days)
 
+    # ⚠️ Автоматически отключаем старые активные подписки пользователя
+    deactivate_existing_active_subscriptions(
+        telegram_user_id=target_id,
+        reason="auto_replace_manual",
+    )
+
     # Генерим ключи и IP
     client_priv, client_pub = wg.generate_keypair()
     client_ip = wg.generate_client_ip()
@@ -1423,7 +1485,6 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer("Эта кнопка только для администратора.", show_alert=True)
         return
 
-
     data = callback.data or ""
     parts = data.split(":")
     if len(parts) != 3:
@@ -1479,9 +1540,24 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer("Подписка деактивирована.")
         return
 
-
     # АКТИВАЦИЯ
     if action == "act":
+        # Сначала берём подписку, чтобы узнать telegram_user_id
+        sub_before = db.get_subscription_by_id(sub_id=sub_id)
+        if not sub_before:
+            await callback.answer("Подписка не найдена.", show_alert=True)
+            return
+
+        telegram_user_id = sub_before.get("telegram_user_id")
+
+        # ⚠️ СНАЧАЛА отключаем старые активные подписки пользователя
+        if telegram_user_id:
+            deactivate_existing_active_subscriptions(
+                telegram_user_id=telegram_user_id,
+                reason="auto_replace_inline_activate",
+            )
+
+        # Теперь активируем нужную подписку
         sub = db.activate_subscription_by_id(
             sub_id=sub_id,
             event_name="admin_activate",
@@ -1540,7 +1616,6 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer("Подписка активирована.")
         return
 
-
     # УДАЛЕНИЕ
     if action == "del":
         sub = db.get_subscription_by_id(sub_id=sub_id)
@@ -1587,8 +1662,8 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
         await callback.answer("Подписка удалена.")
         return
 
-
     await callback.answer("Неизвестное действие.", show_alert=True)
+
 
 async def set_bot_commands(bot: Bot) -> None:
     commands = [
