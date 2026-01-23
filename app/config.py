@@ -22,9 +22,11 @@ class Settings(BaseModel):
     WG_CLIENT_IP_START: int = int(os.getenv("WG_CLIENT_IP_START", "10"))
 
     TRIBUTE_WEBHOOK_SECRET: str = os.getenv("TRIBUTE_WEBHOOK_SECRET", "")
+    YOOKASSA_WEBHOOK_SECRET: str = os.getenv("YOOKASSA_WEBHOOK_SECRET", "")
 
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     ADMIN_TELEGRAM_ID: int = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
+
 
 
 settings = Settings()

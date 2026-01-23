@@ -473,3 +473,21 @@ def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
             cur.execute(sql)
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+        
+
+def subscription_exists_by_event(event_name: str) -> bool:
+    """
+    Проверяет, есть ли в базе хотя бы одна запись с таким last_event_name.
+    Используется для идемпотентной обработки вебхуков ЮKassa.
+    """
+    sql = """
+    SELECT 1
+    FROM vpn_subscriptions
+    WHERE last_event_name = %s
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (event_name,))
+            row = cur.fetchone()
+            return row is not None

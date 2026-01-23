@@ -23,7 +23,9 @@ from . import db
 from .bot import INSTRUCTION_TEXT, send_vpn_config_to_user
 from . import wg
 from .logger import get_logger
+from .yookassa_client import create_yookassa_payment
 log = get_logger()
+
 
 
 def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
@@ -80,22 +82,83 @@ class AdminAddSub(StatesGroup):
 class DemoRequest(StatesGroup):
     waiting_for_message = State()
 
+# Справочник тарифов для оплаты через ЮKassa.
+# Цены указаны в РУБЛЯХ.
+TARIFFS = {
+    "1m": {
+        "amount": "100.00",
+        "label": "1 месяц — 100 ₽",
+    },
+    "3m": {
+        "amount": "250.00",
+        "label": "3 месяца — 250 ₽",
+    },
+    "6m": {
+        "amount": "400.00",
+        "label": "6 месяцев — 400 ₽",
+    },
+    "1y": {
+        "amount": "777.00",
+        "label": "1 год — 777 ₽",
+    },
+}
+
+
+TARIFF_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="1 месяц — 100 ₽",
+                callback_data="pay:tariff:1m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="3 месяца — 250 ₽",
+                callback_data="pay:tariff:3m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="6 месяцев — 400 ₽",
+                callback_data="pay:tariff:6m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="1 год — 777 ₽",
+                callback_data="pay:tariff:1y",
+            ),
+        ],
+    ]
+)
+
+
 
 # Кнопка "Подключить VPN" и кнопка "Запросить демо доступ"
 SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🔐 Подключить VPN",
+                text="🔐 Подключить VPN (Tribute)",
                 url="https://t.me/tribute/app?startapp=dAUr",
             ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="💳 Оплатить картой (ЮKassa)",
+                callback_data="pay:open",
+            ),
+        ],
+        [
             InlineKeyboardButton(
                 text="🎁 Запросить демо доступ",
                 callback_data="demo_request",  # изменен callback_data
             ),
-        ]
+        ],
     ]
 )
+
 
 
 
@@ -141,16 +204,19 @@ SUPPORT_TEXT = (
 
 SUBSCRIPTION_TEXT = (
     "💳 <b>Тарифы MaxNet VPN</b>\n\n"
-    "🔹 <b>1 месяц</b> — <b>2 €</b>\n"
-    "🔹 <b>3 месяца</b> — <b>5 €</b>\n"
-    "🔹 <b>6 месяцев</b> — <b>9 €</b>\n"
-    "🔹 <b>1 год</b> — <b>17 €</b>\n"
-    "🔹 <b>Навсегда</b> — <b>100 €</b>\n\n"
-    "🎁 <b>Скидка на первый месяц</b>\n"
-    "Если ты оформляешь подписку первый раз — первый месяц стоит <b>1 €</b> вместо 2 €.\n\n"
-    "Все платежи проходят через Tribute.\n"
-    "Чтобы оформить подписку, нажми кнопку «Подключить VPN» под этим сообщением или используй /start."
+    "🔹 <b>1 месяц</b> — <b>100 ₽</b>\n"
+    "🔹 <b>3 месяца</b> — <b>250 ₽</b>\n"
+    "🔹 <b>6 месяцев</b> — <b>400 ₽</b>\n"
+    "🔹 <b>1 год</b> — <b>777 ₽</b>\n"
+    "🔹 <b>Навсегда</b> — <b>1999 ₽</b>\n\n"
+    "Оплатить доступ можно:\n"
+    "• через Tribute (кнопка «Подключить VPN»);\n"
+    "• банковской картой в рублях через ЮKassa (команда /buy).\n\n"
+    "Чтобы оформить подписку, нажми кнопку «Подключить VPN» под этим сообщением или используй /start, "
+    "либо выбери /buy для оплаты картой."
 )
+
+
 
 
 AGREEMENT_TEXT = (
@@ -289,6 +355,24 @@ async def cmd_subscription(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.message(Command("buy"))
+async def cmd_buy(message: Message) -> None:
+    await message.answer(
+        "Выбери тариф для оплаты через банковскую карту (ЮKassa):",
+        reply_markup=TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+
+@router.callback_query(F.data == "pay:open")
+async def pay_open_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Выбери тариф для оплаты через банковскую карту (ЮKassa):",
+        reply_markup=TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
 @router.message(Command("demo"))
 async def cmd_demo(message: Message, state: FSMContext) -> None:
     await state.set_state(DemoRequest.waiting_for_message)
@@ -316,6 +400,63 @@ async def demo_request_button(callback: CallbackQuery, state: FSMContext) -> Non
     )
     await callback.answer()
 
+@router.callback_query(F.data.startswith("pay:tariff:"))
+async def pay_tariff_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, tariff_code = parts
+    tariff = TARIFFS.get(tariff_code)
+
+    if tariff is None:
+        await callback.answer("Неизвестный тариф.", show_alert=True)
+        return
+
+    if callback.from_user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = callback.from_user.id
+
+    try:
+        confirmation_url = create_yookassa_payment(
+            telegram_user_id=telegram_user_id,
+            tariff_code=tariff_code,
+            amount=tariff["amount"],
+            description=f"MaxNet VPN — {tariff['label']}",
+        )
+    except Exception as e:
+        log.error(
+            "[YooKassa] Failed to create payment for tg_id=%s tariff=%s: %s",
+            telegram_user_id,
+            tariff_code,
+            repr(e),
+        )
+        await callback.answer("Ошибка при создании платежа. Попробуй позже.", show_alert=True)
+        return
+
+    pay_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💳 Перейти к оплате",
+                    url=confirmation_url,
+                )
+            ]
+        ]
+    )
+
+    await callback.message.answer(
+        "Перейди по кнопке ниже на защищённую платёжную страницу ЮKassa.\n\n"
+        "После успешной оплаты бот автоматически выдаст доступ к VPN.",
+        reply_markup=pay_keyboard,
+        disable_web_page_preview=True,
+    )
+
+    await callback.answer()
 
 
 @router.message(Command("status"))
@@ -343,8 +484,10 @@ async def cmd_status(message: Message) -> None:
         "🔐 Текущий статус VPN-подписки:\n\n"
         f"• VPN IP: <code>{vpn_ip}</code>\n"
         f"• Действует до: <b>{expires_str}</b>\n\n"
-        "Если связь пропадёт после этой даты — просто продли подписку через Tribute."
+        "Если связь пропадёт после этой даты — просто продли подписку через Tribute "
+        "или оплати новый период по команде /buy."
     )
+
 
     await message.answer(
         text,
@@ -1678,11 +1821,13 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Инструкция по подключению"),
         BotCommand(command="status", description="Статус VPN-подписки"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
+        BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
         BotCommand(command="demo", description="Запросить демо-доступ"),
         BotCommand(command="support", description="Связаться с поддержкой"),
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 
@@ -1733,7 +1878,9 @@ async def auto_deactivate_expired_subscriptions() -> None:
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
-
+    
+    from aiohttp import web
+    from .yookassa_webhook_runner import create_app
     from aiogram.client.default import DefaultBotProperties
 
     bot = Bot(
@@ -1749,7 +1896,14 @@ async def main() -> None:
     # запускаем фоновый воркер авто-деактивации
     asyncio.create_task(auto_deactivate_expired_subscriptions())
 
+    app = create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+
     await dp.start_polling(bot)
+
 
 
 
