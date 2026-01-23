@@ -1,9 +1,7 @@
-import asyncio
-from datetime import datetime, timedelta
 import json
-import hmac
-import hashlib
-
+from datetime import datetime, timedelta
+import os
+import base64
 from aiohttp import web
 
 from . import db, wg
@@ -25,27 +23,34 @@ TARIFF_DAYS = {
     "forever": 3650,
 }
 
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
-
-
-def verify_yookassa_signature(raw_body: bytes, signature_header: str | None) -> bool:
+def verify_yookassa_auth(request: web.Request) -> bool:
     """
-    Проверка подписи вебхука ЮKassa.
+    Проверка HTTP Basic-авторизации от ЮKassa.
+    ЮKassa присылает:
+    Authorization: Basic base64(shop_id:secret_key)
     """
-    if not signature_header:
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        log.error("[YooKassaWebhook] SHOP_ID or SECRET_KEY not set")
         return False
 
-    secret = settings.YOOKASSA_WEBHOOK_SECRET
-    if not secret:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Basic "):
         return False
 
-    digest = hmac.new(
-        key=secret.encode("utf-8"),
-        msg=raw_body,
-        digestmod=hashlib.sha256,
-    ).hexdigest()
+    try:
+        encoded = auth_header.split(" ", 1)[1]
+        decoded = base64.b64decode(encoded).decode("utf-8")
+    except Exception:
+        return False
 
-    return hmac.compare_digest(digest, signature_header)
+    if ":" not in decoded:
+        return False
+
+    shop_id, secret = decoded.split(":", 1)
+    return shop_id == YOOKASSA_SHOP_ID and secret == YOOKASSA_SECRET_KEY
 
 
 
@@ -67,31 +72,35 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
       }
     }
     """
-    raw_body = await request.read()
+    # IP отправителя — полезно писать в логи для отладки
+    remote_ip = request.remote
 
-    # Подпись вебхука ЮKassa (заголовок должен совпадать с тем, что ты настроишь в личном кабинете)
-    signature = request.headers.get("X-Content-Signature")
-
-    if not verify_yookassa_signature(raw_body, signature):
-        log.warning("[YooKassaWebhook] Invalid webhook signature")
-        return web.Response(status=403, text="invalid signature")
+    # 🔐 Проверяем, что запрос реально от ЮKassa
+    if not verify_yookassa_auth(request):
+        log.warning("[YooKassaWebhook] Invalid auth from %s", remote_ip)
+        return web.Response(status=403, text="invalid auth")
 
     try:
-        data = json.loads(raw_body.decode("utf-8"))
+        data = await request.json()
     except Exception as e:
-        log.error("[YooKassaWebhook] Failed to parse JSON: %r", e)
+        log.error(
+            "[YooKassaWebhook] Failed to parse JSON from %s: %r",
+            remote_ip,
+            e,
+        )
         return web.Response(text="bad json")
+
 
     event = data.get("event")
     obj = data.get("object") or {}
-
 
     payment_id = obj.get("id")
     status = obj.get("status")
     metadata = obj.get("metadata") or {}
 
     log.info(
-        "[YooKassaWebhook] event=%r status=%r payment_id=%r metadata=%r",
+        "[YooKassaWebhook] ip=%s event=%r status=%r payment_id=%r metadata=%r",
+        remote_ip,
         event,
         status,
         payment_id,
@@ -249,12 +258,11 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
 def create_app() -> web.Application:
     app = web.Application()
-    # путь вебхука — можешь поменять на свой
+    # путь вебхука — совпадает с тем, что ты указал в ЮKassa:
+    # https://pay.maxnetvpn.ru/yookassa/webhook
     app.router.add_post("/yookassa/webhook", handle_yookassa_webhook)
     return app
 
 
 if __name__ == "__main__":
     web.run_app(create_app(), host="0.0.0.0", port=8000)
-
-# _____
