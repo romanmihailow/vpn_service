@@ -10,6 +10,8 @@ from .config import settings
 from .logger import get_logger
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
 log = get_logger()
 
@@ -22,6 +24,33 @@ TARIFF_DAYS = {
     # формально "навсегда" — здесь ставим большой срок, например 10 лет
     "forever": 3650,
 }
+
+
+def verify_yookassa_basic_auth(request: web.Request) -> bool:
+    """
+    Проверка HTTP Basic-авторизации от ЮKassa.
+    ЮKassa присылает:
+    Authorization: Basic base64(shop_id:secret_key)
+    """
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        log.error("[YooKassaWebhook] SHOP_ID or SECRET_KEY not set")
+        return False
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Basic "):
+        return False
+
+    try:
+        encoded = auth_header.split(" ", 1)[1]
+        decoded = base64.b64decode(encoded).decode("utf-8")
+    except Exception:
+        return False
+
+    if ":" not in decoded:
+        return False
+
+    shop_id, secret = decoded.split(":", 1)
+    return shop_id == YOOKASSA_SHOP_ID and secret == YOOKASSA_SECRET_KEY
 
 import hmac
 import hashlib
@@ -75,9 +104,17 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     signature = request.headers.get("X-Content-Signature")
 
-    if not verify_yookassa_signature(raw_body, signature):
-        log.warning("[YooKassaWebhook] Invalid signature from %s", remote_ip)
-        return web.Response(status=403, text="invalid signature")
+    if signature:
+        # Если есть заголовок подписи — проверяем HMAC
+        if not verify_yookassa_signature(raw_body, signature):
+            log.warning("[YooKassaWebhook] Invalid signature from %s", remote_ip)
+            return web.Response(status=403, text="invalid signature")
+    else:
+        # Если подписи нет — проверяем HTTP Basic Auth
+        if not verify_yookassa_basic_auth(request):
+            log.warning("[YooKassaWebhook] Invalid basic auth from %s", remote_ip)
+            return web.Response(status=403, text="invalid auth")
+
 
     try:
         data = json.loads(raw_body.decode("utf-8"))
