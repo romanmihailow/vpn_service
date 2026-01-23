@@ -21,7 +21,11 @@ TARIFF_DAYS = {
     "3m": 90,
     "6m": 180,
     "1y": 365,
+    # формально "навсегда" — здесь ставим большой срок, например 10 лет
+    "forever": 3650,
 }
+
+
 
 
 def verify_yookassa_signature(raw_body: bytes, signature_header: str | None) -> bool:

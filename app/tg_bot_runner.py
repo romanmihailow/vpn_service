@@ -101,7 +101,12 @@ TARIFFS = {
         "amount": "777.00",
         "label": "1 год — 777 ₽",
     },
+    "forever": {
+        "amount": "1999.00",
+        "label": "Навсегда — 1999 ₽",
+    },
 }
+
 
 
 TARIFF_KEYBOARD = InlineKeyboardMarkup(
@@ -130,8 +135,15 @@ TARIFF_KEYBOARD = InlineKeyboardMarkup(
                 callback_data="pay:tariff:1y",
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="Навсегда — 1999 ₽",
+                callback_data="pay:tariff:forever",
+            ),
+        ],
     ]
 )
+
 
 
 
