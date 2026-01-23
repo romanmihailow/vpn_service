@@ -23,34 +23,29 @@ TARIFF_DAYS = {
     "forever": 3650,
 }
 
-YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
-YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
+import hmac
+import hashlib
 
-def verify_yookassa_auth(request: web.Request) -> bool:
+def verify_yookassa_signature(raw_body: bytes, signature: str | None) -> bool:
     """
-    Проверка HTTP Basic-авторизации от ЮKassa.
-    ЮKassa присылает:
-    Authorization: Basic base64(shop_id:secret_key)
+    Проверка подписи вебхука ЮKassa (HMAC-SHA256).
     """
-    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
-        log.error("[YooKassaWebhook] SHOP_ID or SECRET_KEY not set")
+    if not signature:
         return False
 
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Basic "):
+    secret = settings.YOOKASSA_WEBHOOK_SECRET
+    if not secret:
+        log.error("[YooKassaWebhook] YOOKASSA_WEBHOOK_SECRET not set")
         return False
 
-    try:
-        encoded = auth_header.split(" ", 1)[1]
-        decoded = base64.b64decode(encoded).decode("utf-8")
-    except Exception:
-        return False
+    digest = hmac.new(
+        key=secret.encode("utf-8"),
+        msg=raw_body,
+        digestmod=hashlib.sha256,
+    ).hexdigest()
 
-    if ":" not in decoded:
-        return False
+    return hmac.compare_digest(digest, signature)
 
-    shop_id, secret = decoded.split(":", 1)
-    return shop_id == YOOKASSA_SHOP_ID and secret == YOOKASSA_SECRET_KEY
 
 
 
@@ -76,12 +71,17 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     remote_ip = request.remote
 
     # 🔐 Проверяем, что запрос реально от ЮKassa
-    if not verify_yookassa_auth(request):
-        log.warning("[YooKassaWebhook] Invalid auth from %s", remote_ip)
-        return web.Response(status=403, text="invalid auth")
+    raw_body = await request.read()
+
+    signature = request.headers.get("X-Content-Signature")
+
+    if not verify_yookassa_signature(raw_body, signature):
+        log.warning("[YooKassaWebhook] Invalid signature from %s", remote_ip)
+        return web.Response(status=403, text="invalid signature")
 
     try:
-        data = await request.json()
+        data = json.loads(raw_body.decode("utf-8"))
+
     except Exception as e:
         log.error(
             "[YooKassaWebhook] Failed to parse JSON from %s: %r",
