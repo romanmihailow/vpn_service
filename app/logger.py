@@ -1,8 +1,9 @@
 import logging
 import os
 
-LOG_DIR = "/home/vpn_service/logs"
+LOG_DIR = "/app/logs"
 LOG_FILE = os.path.join(LOG_DIR, "vpn_service.log")
+
 
 os.makedirs(LOG_DIR, exist_ok=True)
 

@@ -19,7 +19,9 @@ def create_yookassa_payment(
     tariff_code: str,
     amount: str,
     description: str,
+    telegram_user_name: str | None = None,
 ) -> str:
+
     """
     Создаёт платёж в ЮKassa и возвращает confirmation_url,
     на который нужно отправить пользователя для оплаты.
@@ -45,8 +47,10 @@ def create_yookassa_payment(
         "metadata": {
             "telegram_user_id": telegram_user_id,
             "tariff_code": tariff_code,
+            "telegram_user_name": telegram_user_name,
         },
     }
+
 
     headers = {
         "Content-Type": "application/json",

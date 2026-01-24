@@ -133,6 +133,8 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     payment_id = obj.get("id")
     status = obj.get("status")
     metadata = obj.get("metadata") or {}
+    telegram_user_name = metadata.get("telegram_user_name")
+
 
     log.info(
         "[YooKassaWebhook] ip=%s event=%r status=%r payment_id=%r metadata=%r",
@@ -239,7 +241,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         db.insert_subscription(
             tribute_user_id=0,
             telegram_user_id=telegram_user_id,
-            telegram_user_name=None,  # username можем не знать на этом этапе
+            telegram_user_name=telegram_user_name,
             subscription_id=0,
             period_id=0,
             period=f"yookassa_{tariff_code}",
@@ -251,6 +253,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             expires_at=expires_at,
             event_name=event_name,
         )
+
         log.info(
             "[YooKassaWebhook] Inserted subscription for tg_id=%s ip=%s until %s",
             telegram_user_id,
