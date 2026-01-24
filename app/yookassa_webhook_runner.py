@@ -28,6 +28,15 @@ TARIFF_DAYS = {
     "forever": 3650,
 }
 
+# Ожидаемые суммы по тарифам (можешь подправить под свои цены)
+TARIFF_AMOUNTS = {
+    "1m": "100.00",
+    "3m": "250.00",
+    "6m": "450.00",
+    "1y": "800.00",
+    "forever": "1500.00",
+}
+
 
 def verify_yookassa_basic_auth(request: web.Request) -> bool:
     """
@@ -260,6 +269,14 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         log.error("[YooKassaWebhook] Unknown tariff_code=%r", tariff_code)
         return web.Response(text="ok (unknown tariff)")
 
+    expected_amount = TARIFF_AMOUNTS.get(tariff_code)
+    if not expected_amount:
+        log.error(
+            "[YooKassaWebhook] No expected amount configured for tariff_code=%r",
+            tariff_code,
+        )
+        return web.Response(text="ok (no amount for tariff)")
+
     # 🔍 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА ЧЕРЕЗ API ЮKassa
     api_payment = fetch_payment_from_yookassa(payment_id)
     if not api_payment:
@@ -271,14 +288,19 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     api_paid = api_payment.get("paid")
     api_metadata = api_payment.get("metadata") or {}
     api_test = api_payment.get("test")
+    api_amount_obj = api_payment.get("amount") or {}
+    api_amount_value = str(api_amount_obj.get("value"))
+    api_currency = api_amount_obj.get("currency")
 
     log.info(
-        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r",
+        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r amount=%s currency=%s",
         payment_id,
         api_status,
         api_paid,
         api_test,
         api_metadata,
+        api_amount_value,
+        api_currency,
     )
 
     # Статус в API должен быть succeeded и paid == True
@@ -290,6 +312,17 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             api_paid,
         )
         return web.Response(text="ok (api not succeeded)")
+
+    # Проверяем сумму и валюту
+    if api_currency != "RUB" or api_amount_value != expected_amount:
+        log.error(
+            "[YooKassaWebhook] Amount mismatch for payment %s: expected %s RUB, got %s %s",
+            payment_id,
+            expected_amount,
+            api_amount_value,
+            api_currency,
+        )
+        return web.Response(text="ok (amount mismatch)")
 
     # Метаданные в API должны совпадать с тем, что пришло в вебхуке
     api_tg_id_raw = api_metadata.get("telegram_user_id")
