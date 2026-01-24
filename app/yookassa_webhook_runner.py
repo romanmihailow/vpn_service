@@ -155,6 +155,19 @@ def fetch_payment_from_yookassa(payment_id: str) -> dict | None:
 
     return data
 
+def parse_yookassa_datetime(dt_str: str) -> datetime | None:
+    """
+    Парсим дату/время из ЮKassa (например, '2026-01-24T11:18:39.321Z')
+    в timezone-aware datetime с UTC.
+    """
+    if not dt_str:
+        return None
+    try:
+        if dt_str.endswith("Z"):
+            dt_str = dt_str[:-1] + "+00:00"
+        return datetime.fromisoformat(dt_str)
+    except Exception:
+        return None
 
 async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     """
@@ -555,8 +568,11 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     except Exception:
         api_refunded_value = Decimal("0.00")
 
+    api_created_at_str = api_payment.get("created_at")
+    api_created_at_dt = parse_yookassa_datetime(api_created_at_str)
+
     log.info(
-        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r amount=%s currency=%s refunded_amount=%s",
+        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r amount=%s currency=%s refunded_amount=%s created_at=%s",
         payment_id,
         api_status,
         api_paid,
@@ -565,7 +581,9 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         api_amount_value,
         api_currency,
         api_refunded_value,
+        api_created_at_str,
     )
+
 
 
     # Статус в API должен быть succeeded и paid == True
@@ -654,6 +672,29 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
 
     if yookassa_sub is not None:
+        # Дополнительная защита от ретраев старых платежей:
+        # если по подписке уже был обработан другой, более "свежий" платёж,
+        # а текущий payment_id старше или того же времени — пропускаем.
+        last_event_name = str(yookassa_sub.get("last_event_name") or "")
+        prefix = "yookassa_payment_succeeded_"
+        if last_event_name.startswith(prefix):
+            last_payment_id = last_event_name[len(prefix) :]
+            if last_payment_id and last_payment_id != payment_id:
+                last_payment = fetch_payment_from_yookassa(last_payment_id)
+                if last_payment:
+                    last_created_at_str = last_payment.get("created_at")
+                    last_created_at_dt = parse_yookassa_datetime(last_created_at_str)
+
+                    if api_created_at_dt and last_created_at_dt and api_created_at_dt <= last_created_at_dt:
+                        log.warning(
+                            "[YooKassaWebhook] Payment %s is older or same as already processed payment %s (created_at=%s, last_created_at=%s) — skip extension",
+                            payment_id,
+                            last_payment_id,
+                            api_created_at_str,
+                            last_created_at_str,
+                        )
+                        return web.Response(text="ok (stale payment, not extended)")
+
         # Есть активная подписка YooKassa — продлеваем её, а не создаём новую
         old_expires_at = yookassa_sub["expires_at"]
 
@@ -661,6 +702,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         # если вдруг expires_at в прошлом (или почти), считаем от now
         base_dt = old_expires_at if old_expires_at > now else now
         new_expires_at = base_dt + timedelta(days=days)
+
 
         try:
             db.update_subscription_expiration(
