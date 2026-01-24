@@ -1,12 +1,15 @@
 import os
 import uuid
 import logging
+from .logger import get_yookassa_logger
+
 from typing import Dict, Any
 
 import requests
 
 
-logger = logging.getLogger(__name__)
+logger = get_yookassa_logger()
+
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
@@ -59,6 +62,15 @@ def create_yookassa_payment(
 
     auth = (YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY)
 
+    logger.info(
+        "[YooKassaClient] creating payment tg_id=%s tariff=%s amount=%s idempotence=%s metadata=%r",
+        telegram_user_id,
+        tariff_code,
+        amount,
+        idempotence_key,
+        payload.get("metadata"),
+    )
+
     response = requests.post(
         YOOKASSA_API_URL,
         json=payload,
@@ -76,6 +88,13 @@ def create_yookassa_payment(
         raise RuntimeError("ЮKassa вернула ошибку при создании платежа")
 
     data = response.json()
+    logger.info(
+        "[YooKassaClient] payment created id=%s status=%s paid=%s",
+        data.get("id"),
+        data.get("status"),
+        data.get("paid"),
+    )
+
     confirmation = data.get("confirmation") or {}
     confirmation_url = confirmation.get("confirmation_url")
 

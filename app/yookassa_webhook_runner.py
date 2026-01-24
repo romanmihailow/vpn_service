@@ -7,13 +7,15 @@ from aiohttp import web
 from . import db, wg
 from .bot import send_vpn_config_to_user
 from .config import settings
-from .logger import get_logger
+from .logger import get_yookassa_logger
+
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
-log = get_logger()
+log = get_yookassa_logger()
+
 
 # Сколько дней даёт каждый тариф ЮKassa
 TARIFF_DAYS = {
@@ -101,6 +103,14 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     # 🔐 Читаем сырое тело и пишем отладочную инфу
     raw_body = await request.read()
+    
+    log.info(
+        "[YooKassaWebhook] received from %s headers=%r body=%s",
+        remote_ip,
+        dict(request.headers),
+        raw_body.decode("utf-8", errors="replace"),
+    )
+
 
     log.debug(
         "[YooKassaWebhook] raw_body=%r headers=%r from %s",
@@ -117,6 +127,15 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     try:
         data = json.loads(raw_body.decode("utf-8"))
+        
+        log.info(
+            "[YooKassaWebhook] parsed event=%s payment_id=%s status=%s metadata=%r",
+            data.get("event"),
+            (data.get("object") or {}).get("id"),
+            (data.get("object") or {}).get("status"),
+            (data.get("object") or {}).get("metadata"),
+        )
+
 
     except Exception as e:
         log.error(
@@ -134,16 +153,20 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     status = obj.get("status")
     metadata = obj.get("metadata") or {}
     telegram_user_name = metadata.get("telegram_user_name")
-
+    created_at = obj.get("created_at")
+    is_test = obj.get("test")
 
     log.info(
-        "[YooKassaWebhook] ip=%s event=%r status=%r payment_id=%r metadata=%r",
+        "[YooKassaWebhook] ip=%s event=%r status=%r payment_id=%r created_at=%r test=%r metadata=%r",
         remote_ip,
         event,
         status,
         payment_id,
+        created_at,
+        is_test,
         metadata,
     )
+
 
     # Нас интересует только успешный платёж
     if event != "payment.succeeded" or status != "succeeded":
@@ -267,6 +290,12 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             e,
         )
         return web.Response(text="ok (db error)")
+
+    log.info(
+        "[YooKassaWebhook] issuing VPN config tg_id=%s payment_id=%s",
+        telegram_user_id,
+        payment_id,
+    )
 
     # Генерим конфиг и отправляем пользователю в Telegram
     config_text = wg.build_client_config(
