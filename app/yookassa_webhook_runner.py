@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import base64
 
@@ -18,7 +18,6 @@ YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
 log = get_yookassa_logger()
 
-
 # Сколько дней даёт каждый тариф ЮKassa
 TARIFF_DAYS = {
     "1m": 30,
@@ -33,7 +32,7 @@ TARIFF_DAYS = {
 TARIFF_AMOUNTS = {
     "1m": "100.00",
     "3m": "250.00",
-    "6m": "4400.00",
+    "6m": "400.00",
     "1y": "777.00",
     "forever": "1999.00",
 }
@@ -479,10 +478,11 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     # ЛОГИКА ПРОДЛЕНИЯ ПОДПИСКИ
     # =========================
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Ищем активные НЕ истёкшие подписки этого tg-пользователя
     active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
+
 
     log.info(
         "[YooKassaWebhook] active_subscriptions_for_tg_id=%s: %r",
