@@ -237,10 +237,72 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         metadata,
     )
 
-    # Нас интересует только успешный платёж
+    # Обработка разных типов событий от YooKassa
     if event != "payment.succeeded" or status != "succeeded":
-        # Для остальных событий просто отвечаем OK, чтобы ЮKassa не ретраила.
+        # Дополнительная обработка отменённых платежей
+        if event == "payment.canceled":
+            log.info(
+                "[YooKassaWebhook] payment.canceled received payment_id=%r metadata=%r",
+                payment_id,
+                metadata,
+            )
+
+            if payment_id:
+                # Ищем подписку, созданную на основе успешного платежа
+                success_event_name = f"yookassa_payment_succeeded_{payment_id}"
+                sub = db.get_subscription_by_event(success_event_name)
+                if sub is not None:
+                    sub_id = sub.get("id")
+                    pub_key = sub.get("wg_public_key")
+                    telegram_user_id = sub.get("telegram_user_id")
+
+                    log.info(
+                        "[YooKassaWebhook] cancel payment: found subscription id=%s for tg_id=%s, deactivating",
+                        sub_id,
+                        telegram_user_id,
+                    )
+
+                    # Деактивируем подписку в БД
+                    deactivated = db.deactivate_subscription_by_id(
+                        sub_id=sub_id,
+                        event_name=f"yookassa_payment_canceled_{payment_id}",
+                    )
+
+                    if deactivated and pub_key:
+                        try:
+                            log.info(
+                                "[YooKassaWebhook] Remove peer pubkey=%s for canceled payment_id=%s sub_id=%s",
+                                pub_key,
+                                payment_id,
+                                sub_id,
+                            )
+                            wg.remove_peer(pub_key)
+                        except Exception as e:
+                            log.error(
+                                "[YooKassaWebhook] Failed to remove peer for canceled payment_id=%s sub_id=%s: %r",
+                                payment_id,
+                                sub_id,
+                                e,
+                            )
+                else:
+                    log.info(
+                        "[YooKassaWebhook] cancel payment: no subscription found for event_name=%s",
+                        f"yookassa_payment_succeeded_{payment_id}",
+                    )
+
+            return web.Response(text="ok (payment canceled handled)")
+
+        # Логируем другие события для анализа
+        log.info(
+            "[YooKassaWebhook] non-success event=%r status=%r payment_id=%r metadata=%r",
+            event,
+            status,
+            payment_id,
+            metadata,
+        )
         return web.Response(text="ok (ignored)")
+
+
 
     if not payment_id:
         log.error("[YooKassaWebhook] No payment_id in object")

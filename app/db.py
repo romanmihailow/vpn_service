@@ -475,6 +475,7 @@ def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
             return [dict(r) for r in rows]
         
 
+
 def subscription_exists_by_event(event_name: str) -> bool:
     """
     Проверяет, есть ли в базе хотя бы одна запись с таким last_event_name.
@@ -491,3 +492,24 @@ def subscription_exists_by_event(event_name: str) -> bool:
             cur.execute(sql, (event_name,))
             row = cur.fetchone()
             return row is not None
+        
+def get_subscription_by_event(event_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает последнюю подписку с заданным last_event_name.
+    Используем, чтобы найти подписку по платежу YooKassa
+    (например, yookassa_payment_succeeded_<payment_id>).
+    """
+    sql = """
+    SELECT *
+    FROM vpn_subscriptions
+    WHERE last_event_name = %s
+    ORDER BY id DESC
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (event_name,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return dict(row)
