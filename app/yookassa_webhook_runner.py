@@ -299,49 +299,183 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             # В поле object.payment_id лежит id исходного платежа.
             refund_id = payment_id  # текущее payment_id — это id возврата
             refund_payment_id = obj.get("payment_id")
+            refund_amount_obj = obj.get("amount") or {}
+            refund_amount_raw = refund_amount_obj.get("value") or "0.00"
+            refund_currency = refund_amount_obj.get("currency")
+
+            try:
+                refund_amount = Decimal(str(refund_amount_raw))
+            except Exception:
+                refund_amount = Decimal("0.00")
 
             log.info(
-                "[YooKassaWebhook] refund.succeeded received refund_id=%r payment_id=%r",
+                "[YooKassaWebhook] refund.succeeded received refund_id=%r payment_id=%r refund_amount=%s %s",
                 refund_id,
                 refund_payment_id,
+                refund_amount,
+                refund_currency,
             )
 
             if refund_payment_id:
+                # Пытаемся вытащить оригинальный платёж, чтобы понять тариф и сумму
+                api_payment = fetch_payment_from_yookassa(refund_payment_id)
+                if not api_payment:
+                    log.error(
+                        "[YooKassaWebhook] refund: failed to fetch original payment %s for refund_id=%s",
+                        refund_payment_id,
+                        refund_id,
+                    )
+                    return web.Response(text="ok (refund handled, no original payment)")
+
+                api_metadata = api_payment.get("metadata") or {}
+                api_amount_obj = api_payment.get("amount") or {}
+                api_amount_value_raw = api_amount_obj.get("value") or "0.00"
+                api_currency = api_amount_obj.get("currency")
+
+                try:
+                    total_amount = Decimal(str(api_amount_value_raw))
+                except Exception:
+                    total_amount = Decimal("0.00")
+
+                tariff_code_from_payment = api_metadata.get("tariff_code")
+
+                log.info(
+                    "[YooKassaWebhook] refund: original payment_id=%s total_amount=%s %s tariff_code=%r",
+                    refund_payment_id,
+                    total_amount,
+                    api_currency,
+                    tariff_code_from_payment,
+                )
+
+                # Ищем подписку, созданную на основе успешного платежа
                 success_event_name = f"yookassa_payment_succeeded_{refund_payment_id}"
                 sub = db.get_subscription_by_event(success_event_name)
                 if sub is not None:
                     sub_id = sub.get("id")
                     pub_key = sub.get("wg_public_key")
                     telegram_user_id = sub.get("telegram_user_id")
+                    old_expires_at = sub.get("expires_at")
 
                     log.info(
-                        "[YooKassaWebhook] refund: found subscription id=%s for tg_id=%s, deactivating",
+                        "[YooKassaWebhook] refund: found subscription id=%s for tg_id=%s with expires_at=%s",
                         sub_id,
                         telegram_user_id,
+                        old_expires_at,
                     )
 
-                    # Деактивируем подписку в БД
-                    deactivated = db.deactivate_subscription_by_id(
-                        sub_id=sub_id,
-                        event_name=f"yookassa_refund_succeeded_{refund_id}",
+                    # Определяем, сколько дней дал этот платёж
+                    # 1) пытаемся взять по tariff_code из оригинального платежа
+                    days_for_tariff = None
+                    if tariff_code_from_payment in TARIFF_DAYS:
+                        days_for_tariff = TARIFF_DAYS[tariff_code_from_payment]
+                    else:
+                        # 2) пробуем вытащить из sub["period"], если там формат "yookassa_1m"
+                        period = str(sub.get("period") or "")
+                        if period.startswith("yookassa_"):
+                            suffix = period[len("yookassa_") :]
+                            if suffix in TARIFF_DAYS:
+                                days_for_tariff = TARIFF_DAYS[suffix]
+
+                    if days_for_tariff is None:
+                        log.error(
+                            "[YooKassaWebhook] refund: cannot determine tariff days for refund_id=%s payment_id=%s",
+                            refund_id,
+                            refund_payment_id,
+                        )
+                        # Фоллбэк: деактивируем подписку целиком, как раньше
+                        deactivated = db.deactivate_subscription_by_id(
+                            sub_id=sub_id,
+                            event_name=f"yookassa_refund_succeeded_{refund_id}",
+                        )
+                        if deactivated and pub_key:
+                            try:
+                                log.info(
+                                    "[YooKassaWebhook] Remove peer pubkey=%s for refund refund_id=%s sub_id=%s (fallback full deactivate)",
+                                    pub_key,
+                                    refund_id,
+                                    sub_id,
+                                )
+                                wg.remove_peer(pub_key)
+                            except Exception as e:
+                                log.error(
+                                    "[YooKassaWebhook] Failed to remove peer for refund refund_id=%s sub_id=%s: %r",
+                                    refund_id,
+                                    sub_id,
+                                    e,
+                                )
+                        return web.Response(text="ok (refund handled, fallback deactivate)")
+
+                    # Если нет суммы или валюты, откатываем весь тариф
+                    if total_amount <= Decimal("0.00") or refund_amount <= Decimal("0.00"):
+                        days_to_revert = days_for_tariff
+                    else:
+                        # Считаем долю возврата и пропорциональное кол-во дней
+                        ratio = refund_amount / total_amount
+                        if ratio > Decimal("1"):
+                            ratio = Decimal("1")
+                        days_to_revert = int(days_for_tariff * ratio)
+                        if days_to_revert <= 0 and refund_amount > Decimal("0.00"):
+                            days_to_revert = 1
+
+                    now = datetime.now(timezone.utc)
+                    new_expires_at = old_expires_at - timedelta(days=days_to_revert)
+
+                    log.info(
+                        "[YooKassaWebhook] refund: days_for_tariff=%s days_to_revert=%s old_expires_at=%s new_expires_at=%s now=%s",
+                        days_for_tariff,
+                        days_to_revert,
+                        old_expires_at,
+                        new_expires_at,
+                        now,
                     )
 
-                    if deactivated and pub_key:
+                    if new_expires_at <= now:
+                        # Подписка по факту "съедена" возвратом — деактивируем
+                        deactivated = db.deactivate_subscription_by_id(
+                            sub_id=sub_id,
+                            event_name=f"yookassa_refund_succeeded_{refund_id}",
+                        )
+                        if deactivated and pub_key:
+                            try:
+                                log.info(
+                                    "[YooKassaWebhook] Remove peer pubkey=%s for refund refund_id=%s sub_id=%s (full deactivate after revert)",
+                                    pub_key,
+                                    refund_id,
+                                    sub_id,
+                                )
+                                wg.remove_peer(pub_key)
+                            except Exception as e:
+                                log.error(
+                                    "[YooKassaWebhook] Failed to remove peer for refund refund_id=%s sub_id=%s: %r",
+                                    refund_id,
+                                    sub_id,
+                                    e,
+                                )
+                    else:
+                        # Просто сокращаем срок подписки
                         try:
-                            log.info(
-                                "[YooKassaWebhook] Remove peer pubkey=%s for refund refund_id=%s sub_id=%s",
-                                pub_key,
-                                refund_id,
-                                sub_id,
+                            db.update_subscription_expiration(
+                                sub_id=sub_id,
+                                expires_at=new_expires_at,
+                                event_name=f"yookassa_refund_succeeded_{refund_id}",
                             )
-                            wg.remove_peer(pub_key)
+                            log.info(
+                                "[YooKassaWebhook] refund: shortened subscription id=%s for tg_id=%s: old_expires=%s new_expires=%s (-%s days)",
+                                sub_id,
+                                telegram_user_id,
+                                old_expires_at,
+                                new_expires_at,
+                                days_to_revert,
+                            )
                         except Exception as e:
                             log.error(
-                                "[YooKassaWebhook] Failed to remove peer for refund refund_id=%s sub_id=%s: %r",
-                                refund_id,
+                                "[YooKassaWebhook] Failed to shorten subscription id=%s for tg_id=%s on refund_id=%s: %r",
                                 sub_id,
+                                telegram_user_id,
+                                refund_id,
                                 e,
                             )
+
                 else:
                     log.info(
                         "[YooKassaWebhook] refund: no subscription found for event_name=%s",
@@ -349,6 +483,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                     )
 
             return web.Response(text="ok (refund handled)")
+
 
         # Логируем другие события для анализа
         log.info(
