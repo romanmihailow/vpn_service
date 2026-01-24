@@ -33,9 +33,9 @@ TARIFF_DAYS = {
 TARIFF_AMOUNTS = {
     "1m": "100.00",
     "3m": "250.00",
-    "6m": "450.00",
-    "1y": "800.00",
-    "forever": "1500.00",
+    "6m": "4400.00",
+    "1y": "777.00",
+    "forever": "1999.00",
 }
 
 
@@ -239,7 +239,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     # Обработка разных типов событий от YooKassa
     if event != "payment.succeeded" or status != "succeeded":
-        # Дополнительная обработка отменённых платежей
+        # Дополнительная обработка отменённых платежей (до списания)
         if event == "payment.canceled":
             log.info(
                 "[YooKassaWebhook] payment.canceled received payment_id=%r metadata=%r",
@@ -292,6 +292,63 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
             return web.Response(text="ok (payment canceled handled)")
 
+        # Дополнительная обработка возвратов (refund.succeeded)
+        if event == "refund.succeeded":
+            # Для refund.succeeded объект — это возврат, а не платёж.
+            # В поле object.payment_id лежит id исходного платежа.
+            refund_id = payment_id  # текущее payment_id — это id возврата
+            refund_payment_id = obj.get("payment_id")
+
+            log.info(
+                "[YooKassaWebhook] refund.succeeded received refund_id=%r payment_id=%r",
+                refund_id,
+                refund_payment_id,
+            )
+
+            if refund_payment_id:
+                success_event_name = f"yookassa_payment_succeeded_{refund_payment_id}"
+                sub = db.get_subscription_by_event(success_event_name)
+                if sub is not None:
+                    sub_id = sub.get("id")
+                    pub_key = sub.get("wg_public_key")
+                    telegram_user_id = sub.get("telegram_user_id")
+
+                    log.info(
+                        "[YooKassaWebhook] refund: found subscription id=%s for tg_id=%s, deactivating",
+                        sub_id,
+                        telegram_user_id,
+                    )
+
+                    # Деактивируем подписку в БД
+                    deactivated = db.deactivate_subscription_by_id(
+                        sub_id=sub_id,
+                        event_name=f"yookassa_refund_succeeded_{refund_id}",
+                    )
+
+                    if deactivated and pub_key:
+                        try:
+                            log.info(
+                                "[YooKassaWebhook] Remove peer pubkey=%s for refund refund_id=%s sub_id=%s",
+                                pub_key,
+                                refund_id,
+                                sub_id,
+                            )
+                            wg.remove_peer(pub_key)
+                        except Exception as e:
+                            log.error(
+                                "[YooKassaWebhook] Failed to remove peer for refund refund_id=%s sub_id=%s: %r",
+                                refund_id,
+                                sub_id,
+                                e,
+                            )
+                else:
+                    log.info(
+                        "[YooKassaWebhook] refund: no subscription found for event_name=%s",
+                        success_event_name,
+                    )
+
+            return web.Response(text="ok (refund handled)")
+
         # Логируем другие события для анализа
         log.info(
             "[YooKassaWebhook] non-success event=%r status=%r payment_id=%r metadata=%r",
@@ -301,6 +358,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             metadata,
         )
         return web.Response(text="ok (ignored)")
+
 
 
 
@@ -426,12 +484,19 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     # Ищем активные НЕ истёкшие подписки этого tg-пользователя
     active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
 
+    log.info(
+        "[YooKassaWebhook] active_subscriptions_for_tg_id=%s: %r",
+        telegram_user_id,
+        active_subs,
+    )
+
     # Среди них ищем именно YooKassa-подписку
     yookassa_sub = None
     for sub in active_subs:
         if sub.get("channel_name") == "YooKassa" or str(sub.get("period", "")).startswith("yookassa_"):
             yookassa_sub = sub
             break
+
 
     if yookassa_sub is not None:
         # Есть активная подписка YooKassa — продлеваем её, а не создаём новую
