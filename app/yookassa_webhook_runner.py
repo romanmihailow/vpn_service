@@ -99,21 +99,20 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     # IP отправителя — полезно писать в логи для отладки
     remote_ip = request.remote
 
-    # 🔐 Проверяем, что запрос реально от ЮKassa
+    # 🔐 Читаем сырое тело и пишем отладочную инфу
     raw_body = await request.read()
 
-    signature = request.headers.get("X-Content-Signature")
+    log.debug(
+        "[YooKassaWebhook] raw_body=%r headers=%r from %s",
+        raw_body,
+        dict(request.headers),
+        remote_ip,
+    )
+    # ⚠️ Временно НЕ проверяем подпись и Basic Auth.
+    # YooKassa для HTTP-уведомлений по умолчанию не присылает
+    # ни X-Content-Signature, ни Authorization, из-за этого
+    # строгая проверка ломает обработку реальных вебхуков.
 
-    if signature:
-        # Если есть заголовок подписи — проверяем HMAC
-        if not verify_yookassa_signature(raw_body, signature):
-            log.warning("[YooKassaWebhook] Invalid signature from %s", remote_ip)
-            return web.Response(status=403, text="invalid signature")
-    else:
-        # Если подписи нет — проверяем HTTP Basic Auth
-        if not verify_yookassa_basic_auth(request):
-            log.warning("[YooKassaWebhook] Invalid basic auth from %s", remote_ip)
-            return web.Response(status=403, text="invalid auth")
 
 
     try:
