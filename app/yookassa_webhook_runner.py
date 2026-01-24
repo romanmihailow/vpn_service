@@ -2,13 +2,14 @@ import json
 from datetime import datetime, timedelta
 import os
 import base64
+
+import requests
 from aiohttp import web
 
 from . import db, wg
 from .bot import send_vpn_config_to_user
 from .config import settings
 from .logger import get_yookassa_logger
-
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
@@ -33,6 +34,9 @@ def verify_yookassa_basic_auth(request: web.Request) -> bool:
     Проверка HTTP Basic-авторизации от ЮKassa.
     ЮKassa присылает:
     Authorization: Basic base64(shop_id:secret_key)
+
+    ⚠️ Сейчас НЕ используется в handle_yookassa_webhook,
+    но оставляем на будущее, если включишь защищённые вебхуки.
     """
     if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
         log.error("[YooKassaWebhook] SHOP_ID or SECRET_KEY not set")
@@ -54,12 +58,18 @@ def verify_yookassa_basic_auth(request: web.Request) -> bool:
     shop_id, secret = decoded.split(":", 1)
     return shop_id == YOOKASSA_SHOP_ID and secret == YOOKASSA_SECRET_KEY
 
+
 import hmac
 import hashlib
+
 
 def verify_yookassa_signature(raw_body: bytes, signature: str | None) -> bool:
     """
     Проверка подписи вебхука ЮKassa (HMAC-SHA256).
+
+    ⚠️ Сейчас НЕ используется в handle_yookassa_webhook,
+    т.к. HTTP-уведомления из ЛК ЮKassa её не присылают.
+    Оставляем на будущее для "настоящих" вебхуков.
     """
     if not signature:
         return False
@@ -78,6 +88,61 @@ def verify_yookassa_signature(raw_body: bytes, signature: str | None) -> bool:
     return hmac.compare_digest(digest, signature)
 
 
+def fetch_payment_from_yookassa(payment_id: str) -> dict | None:
+    """
+    Тянем платёж из API ЮKassa по payment_id и проверяем его "по-настоящему".
+
+    Возвращаем dict с данными платежа ИЛИ None, если что-то пошло не так.
+    """
+    if not YOOKASSA_SHOP_ID or not YOOKASSA_SECRET_KEY:
+        log.error("[YooKassaWebhook] Cannot fetch payment: SHOP_ID or SECRET_KEY not set")
+        return None
+
+    url = f"https://api.yookassa.ru/v3/payments/{payment_id}"
+
+    try:
+        resp = requests.get(
+            url,
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            timeout=10,
+        )
+    except Exception as e:
+        log.error(
+            "[YooKassaWebhook] Failed to call YooKassa API for payment %s: %r",
+            payment_id,
+            e,
+        )
+        return None
+
+    if resp.status_code != 200:
+        log.error(
+            "[YooKassaWebhook] YooKassa API returned %s for payment %s: %s",
+            resp.status_code,
+            payment_id,
+            resp.text,
+        )
+        return None
+
+    try:
+        data = resp.json()
+    except Exception as e:
+        log.error(
+            "[YooKassaWebhook] Failed to parse YooKassa API JSON for payment %s: %r",
+            payment_id,
+            e,
+        )
+        return None
+
+    log.info(
+        "[YooKassaWebhook] API payment fetched id=%s status=%s paid=%s test=%r metadata=%r",
+        data.get("id"),
+        data.get("status"),
+        data.get("paid"),
+        data.get("test"),
+        data.get("metadata"),
+    )
+
+    return data
 
 
 async def handle_yookassa_webhook(request: web.Request) -> web.Response:
@@ -103,7 +168,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     # 🔐 Читаем сырое тело и пишем отладочную инфу
     raw_body = await request.read()
-    
+
     log.info(
         "[YooKassaWebhook] received from %s headers=%r body=%s",
         remote_ip,
@@ -111,23 +176,20 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         raw_body.decode("utf-8", errors="replace"),
     )
 
-
     log.debug(
         "[YooKassaWebhook] raw_body=%r headers=%r from %s",
         raw_body,
         dict(request.headers),
         remote_ip,
     )
-    # ⚠️ Временно НЕ проверяем подпись и Basic Auth.
-    # YooKassa для HTTP-уведомлений по умолчанию не присылает
-    # ни X-Content-Signature, ни Authorization, из-за этого
-    # строгая проверка ломает обработку реальных вебхуков.
 
-
+    # ⚠️ Здесь сознательно НЕ проверяем подпись и Basic Auth,
+    # т.к. HTTP-уведомления из ЛК ЮKassa их не присылают.
+    # Безопасность обеспечим через запрос в API по payment_id.
 
     try:
         data = json.loads(raw_body.decode("utf-8"))
-        
+
         log.info(
             "[YooKassaWebhook] parsed event=%s payment_id=%s status=%s metadata=%r",
             data.get("event"),
@@ -136,7 +198,6 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             (data.get("object") or {}).get("metadata"),
         )
 
-
     except Exception as e:
         log.error(
             "[YooKassaWebhook] Failed to parse JSON from %s: %r",
@@ -144,7 +205,6 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             e,
         )
         return web.Response(text="bad json")
-
 
     event = data.get("event")
     obj = data.get("object") or {}
@@ -167,11 +227,14 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         metadata,
     )
 
-
     # Нас интересует только успешный платёж
     if event != "payment.succeeded" or status != "succeeded":
         # Для остальных событий просто отвечаем OK, чтобы ЮKassa не ретраила.
         return web.Response(text="ok (ignored)")
+
+    if not payment_id:
+        log.error("[YooKassaWebhook] No payment_id in object")
+        return web.Response(text="ok (no payment id)")
 
     telegram_user_id_raw = metadata.get("telegram_user_id")
     tariff_code = metadata.get("tariff_code")
@@ -196,6 +259,57 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     if not days:
         log.error("[YooKassaWebhook] Unknown tariff_code=%r", tariff_code)
         return web.Response(text="ok (unknown tariff)")
+
+    # 🔍 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА ЧЕРЕЗ API ЮKassa
+    api_payment = fetch_payment_from_yookassa(payment_id)
+    if not api_payment:
+        # Не смогли проверить платёж — не рискуем, просто отвечаем ok,
+        # чтобы ЮKassa не дудосила ретраями, но доступ не выдаём.
+        return web.Response(text="ok (cannot verify payment)")
+
+    api_status = api_payment.get("status")
+    api_paid = api_payment.get("paid")
+    api_metadata = api_payment.get("metadata") or {}
+    api_test = api_payment.get("test")
+
+    log.info(
+        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r",
+        payment_id,
+        api_status,
+        api_paid,
+        api_test,
+        api_metadata,
+    )
+
+    # Статус в API должен быть succeeded и paid == True
+    if api_status != "succeeded" or not api_paid:
+        log.warning(
+            "[YooKassaWebhook] API payment not succeeded or not paid: id=%s status=%s paid=%s",
+            payment_id,
+            api_status,
+            api_paid,
+        )
+        return web.Response(text="ok (api not succeeded)")
+
+    # Метаданные в API должны совпадать с тем, что пришло в вебхуке
+    api_tg_id_raw = api_metadata.get("telegram_user_id")
+    api_tariff_code = api_metadata.get("tariff_code")
+
+    if str(api_tg_id_raw) != str(telegram_user_id) or api_tariff_code != tariff_code:
+        log.error(
+            "[YooKassaWebhook] API metadata mismatch for payment %s: webhook(tg_id=%r, tariff=%r) api(tg_id=%r, tariff=%r)",
+            payment_id,
+            telegram_user_id,
+            tariff_code,
+            api_tg_id_raw,
+            api_tariff_code,
+        )
+        return web.Response(text="ok (metadata mismatch)")
+
+    # Можно при желании отсеивать test-платежи тут, если живёшь в бою
+    # if api_test:
+    #     log.info("[YooKassaWebhook] Test payment %s — игнорируем в бою", payment_id)
+    #     return web.Response(text="ok (test payment ignored)")
 
     # Идемпотентность: если уже создавали подписку с таким event_name, ничего не делаем
     event_name = f"yookassa_payment_succeeded_{payment_id}"
