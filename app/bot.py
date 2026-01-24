@@ -1,11 +1,13 @@
 import io
 from typing import Optional
+from datetime import datetime
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
 from .config import settings
 import qrcode
+
 
 
 INSTRUCTION_TEXT = """
@@ -134,6 +136,58 @@ async def send_vpn_config_to_user(
         await bot.session.close()
 
 
+async def send_subscription_extended_notification(
+    telegram_user_id: int,
+    new_expires_at: datetime,
+    tariff_code: str,
+) -> None:
+    """
+    Короткое уведомление о продлении подписки без повторной отправки конфига.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        # Можно потом заменить формат на локальный, если захочешь
+        expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        text = (
+            "✅ Ваша подписка MaxNet VPN продлена.\n\n"
+            f"Тариф: <b>{tariff_code}</b>\n"
+            f"Доступ активен до: <b>{expires_str}</b>\n\n"
+            "Спасибо за оплату через YooKassa!"
+        )
+
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    finally:
+        await bot.session.close()
+
+
+async def send_subscription_expired_notification(
+    telegram_user_id: int,
+) -> None:
+    """
+    Уведомление пользователю о том, что его подписка закончилась.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        text = (
+            "⏳ Ваша подписка MaxNet VPN закончилась.\n\n"
+            "Доступ сейчас отключён.\n\n"
+            "Чтобы продолжить пользоваться VPN, оформите новую подписку в боте."
+        )
+
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+        )
+    finally:
+        await bot.session.close()
+
+
 async def send_text_message(
     telegram_user_id: int,
     text: str,
@@ -143,6 +197,8 @@ async def send_text_message(
         await bot.send_message(chat_id=telegram_user_id, text=text)
     finally:
         await bot.session.close()
+
+
 
 
 async def get_telegram_username(

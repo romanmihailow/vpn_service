@@ -20,11 +20,16 @@ from aiogram.fsm.context import FSMContext
 
 from .config import settings
 from . import db
-from .bot import INSTRUCTION_TEXT, send_vpn_config_to_user
+from .bot import (
+    INSTRUCTION_TEXT,
+    send_vpn_config_to_user,
+    send_subscription_expired_notification,
+)
 from . import wg
 from .logger import get_logger
 from .yookassa_client import create_yookassa_payment
 log = get_logger()
+
 
 
 
@@ -1846,7 +1851,7 @@ async def set_bot_commands(bot: Bot) -> None:
 async def auto_deactivate_expired_subscriptions() -> None:
     """
     Периодически ищет в базе все активные подписки с истекшим expires_at,
-    деактивирует их и удаляет peer из WireGuard.
+    деактивирует их, удаляет peer из WireGuard и шлёт пользователю уведомление.
     """
     while True:
         try:
@@ -1867,6 +1872,8 @@ async def auto_deactivate_expired_subscriptions() -> None:
                 if not deactivated:
                     continue
 
+                telegram_user_id = deactivated.get("telegram_user_id")
+
                 if pub_key:
                     try:
                         log.info(
@@ -1881,11 +1888,35 @@ async def auto_deactivate_expired_subscriptions() -> None:
                             sub_id,
                             repr(e),
                         )
+
+                # Пытаемся отправить уведомление о том, что подписка закончилась
+                if telegram_user_id:
+                    try:
+                        await send_subscription_expired_notification(
+                            telegram_user_id=telegram_user_id,
+                        )
+                        log.info(
+                            "[AutoExpire] Sent expiration notification to tg_id=%s for sub_id=%s",
+                            telegram_user_id,
+                            sub_id,
+                        )
+                    except Exception as e:
+                        log.error(
+                            "[AutoExpire] Failed to send expiration notification to tg_id=%s for sub_id=%s: %s",
+                            telegram_user_id,
+                            sub_id,
+                            repr(e),
+                        )
+
         except Exception as e:
-            log.error("[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s", repr(e))
+            log.error(
+                "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
+                repr(e),
+            )
 
         # Проверяем раз в 60 секунд (можешь настроить под себя)
         await asyncio.sleep(60)
+
 
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:

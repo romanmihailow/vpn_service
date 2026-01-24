@@ -7,8 +7,9 @@ import requests
 from aiohttp import web
 
 from . import db, wg
-from .bot import send_vpn_config_to_user
+from .bot import send_vpn_config_to_user, send_subscription_extended_notification
 from .config import settings
+
 from .logger import get_yookassa_logger
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
@@ -354,8 +355,76 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (already processed)")
 
-    # Считаем дату окончания
+    # =========================
+    # ЛОГИКА ПРОДЛЕНИЯ ПОДПИСКИ
+    # =========================
+
     now = datetime.utcnow()
+
+    # Ищем активные НЕ истёкшие подписки этого tg-пользователя
+    active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
+
+    # Среди них ищем именно YooKassa-подписку
+    yookassa_sub = None
+    for sub in active_subs:
+        if sub.get("channel_name") == "YooKassa" or str(sub.get("period", "")).startswith("yookassa_"):
+            yookassa_sub = sub
+            break
+
+    if yookassa_sub is not None:
+        # Есть активная подписка YooKassa — продлеваем её, а не создаём новую
+        old_expires_at = yookassa_sub["expires_at"]
+
+        # Если подписка ещё не истекла — добавляем дни к текущей дате окончания,
+        # если вдруг expires_at в прошлом (или почти), считаем от now
+        base_dt = old_expires_at if old_expires_at > now else now
+        new_expires_at = base_dt + timedelta(days=days)
+
+        try:
+            db.update_subscription_expiration(
+                sub_id=yookassa_sub["id"],
+                expires_at=new_expires_at,
+                event_name=event_name,
+            )
+            log.info(
+                "[YooKassaWebhook] Extended subscription id=%s for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
+                yookassa_sub["id"],
+                telegram_user_id,
+                old_expires_at,
+                new_expires_at,
+                days,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to extend subscription id=%s for tg_id=%s: %r",
+                yookassa_sub["id"],
+                telegram_user_id,
+                e,
+            )
+            return web.Response(text="ok (db extend error)")
+
+        # Уведомляем пользователя о продлении без повторной отправки конфига
+        try:
+            await send_subscription_extended_notification(
+                telegram_user_id=telegram_user_id,
+                new_expires_at=new_expires_at,
+                tariff_code=tariff_code,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to send extension notification to tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            # Не считаем это критичной ошибкой: подписка уже продлена
+
+        return web.Response(text="ok (extended)")
+
+
+    # Если активной YooKassa-подписки нет — работаем по старой схеме:
+    # создаём новую подписку, новый peer и шлём конфиг.
+
+    # Считаем дату окончания от текущего момента
     expires_at = now + timedelta(days=days)
 
     # Отключаем старые активные подписки для этого Telegram-пользователя
@@ -469,6 +538,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         # Ошибка отправки не должна ломать обработку вебхука
 
     return web.Response(text="ok")
+
 
 
 def create_app() -> web.Application:
