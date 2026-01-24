@@ -1,7 +1,9 @@
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import os
 import base64
+
 
 import requests
 from aiohttp import web
@@ -411,9 +413,15 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     api_amount_obj = api_payment.get("amount") or {}
     api_amount_value = str(api_amount_obj.get("value"))
     api_currency = api_amount_obj.get("currency")
+    api_refunded_obj = api_payment.get("refunded_amount") or {}
+    api_refunded_value_raw = api_refunded_obj.get("value") or "0.00"
+    try:
+        api_refunded_value = Decimal(str(api_refunded_value_raw))
+    except Exception:
+        api_refunded_value = Decimal("0.00")
 
     log.info(
-        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r amount=%s currency=%s",
+        "[YooKassaWebhook] API check payment_id=%s status=%s paid=%s test=%r api_metadata=%r amount=%s currency=%s refunded_amount=%s",
         payment_id,
         api_status,
         api_paid,
@@ -421,7 +429,9 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         api_metadata,
         api_amount_value,
         api_currency,
+        api_refunded_value,
     )
+
 
     # Статус в API должен быть succeeded и paid == True
     if api_status != "succeeded" or not api_paid:
@@ -444,9 +454,19 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (amount mismatch)")
 
+    # Если по этому платежу уже есть возврат — не продлеваем и не создаём подписку
+    if api_refunded_value > Decimal("0.00"):
+        log.warning(
+            "[YooKassaWebhook] Payment %s has refunded_amount=%s — treat as refunded, skip VPN granting",
+            payment_id,
+            api_refunded_value,
+        )
+        return web.Response(text="ok (payment refunded)")
+
     # Метаданные в API должны совпадать с тем, что пришло в вебхуке
     api_tg_id_raw = api_metadata.get("telegram_user_id")
     api_tariff_code = api_metadata.get("tariff_code")
+
 
     if str(api_tg_id_raw) != str(telegram_user_id) or api_tariff_code != tariff_code:
         log.error(
