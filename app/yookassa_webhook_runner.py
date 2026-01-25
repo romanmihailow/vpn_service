@@ -313,7 +313,19 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             # В поле object.payment_id лежит id исходного платежа.
             refund_id = payment_id  # текущее payment_id — это id возврата
             refund_payment_id = obj.get("payment_id")
+
+            # Идемпотентность по refund_id: один и тот же возврат не должен применяться дважды
+            refund_event_name = f"yookassa_refund_succeeded_{refund_id}"
+            if refund_id and db.subscription_exists_by_event(refund_event_name):
+                log.info(
+                    "[YooKassaWebhook] refund: refund_id=%s already processed (event_name=%s)",
+                    refund_id,
+                    refund_event_name,
+                )
+                return web.Response(text="ok (refund already processed)")
+
             refund_amount_obj = obj.get("amount") or {}
+
             refund_amount_raw = refund_amount_obj.get("value") or "0.00"
             refund_currency = refund_amount_obj.get("currency")
 
@@ -364,6 +376,27 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 # Ищем подписку, созданную на основе успешного платежа
                 success_event_name = f"yookassa_payment_succeeded_{refund_payment_id}"
                 sub = db.get_subscription_by_event(success_event_name)
+
+                # Если по event_name не нашли (случай старого платежа),
+                # пробуем найти активную YooKassa-подписку по telegram_user_id из metadata
+                if sub is None:
+                    telegram_user_id = None
+                    api_tg_raw = api_metadata.get("telegram_user_id")
+                    try:
+                        if api_tg_raw is not None:
+                            telegram_user_id = int(api_tg_raw)
+                    except ValueError:
+                        telegram_user_id = None
+
+                    if telegram_user_id is not None:
+                        active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
+                        yookassa_sub = None
+                        for candidate in active_subs:
+                            if candidate.get("channel_name") == "YooKassa" or str(candidate.get("period") or "").startswith("yookassa_"):
+                                yookassa_sub = candidate
+                                break
+                        sub = yookassa_sub
+
                 if sub is not None:
                     sub_id = sub.get("id")
                     pub_key = sub.get("wg_public_key")
@@ -492,9 +525,10 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
                 else:
                     log.info(
-                        "[YooKassaWebhook] refund: no subscription found for event_name=%s",
+                        "[YooKassaWebhook] refund: no subscription found for event_name=%s and active YooKassa subscription",
                         success_event_name,
                     )
+
 
             return web.Response(text="ok (refund handled)")
 
