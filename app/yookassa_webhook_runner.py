@@ -596,16 +596,16 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (api not succeeded)")
 
-    # Проверяем сумму и валюту
-    if api_currency != "RUB" or api_amount_value != expected_amount:
+    # Проверяем только валюту (сумму логируем, но не блокируем обработку)
+    if api_currency != "RUB":
         log.error(
-            "[YooKassaWebhook] Amount mismatch for payment %s: expected %s RUB, got %s %s",
+            "[YooKassaWebhook] Wrong currency for payment %s: expected RUB, got %s (amount=%s)",
             payment_id,
-            expected_amount,
-            api_amount_value,
             api_currency,
+            api_amount_value,
         )
-        return web.Response(text="ok (amount mismatch)")
+        return web.Response(text="ok (wrong currency)")
+
 
     # Если по этому платежу уже есть возврат — не продлеваем и не создаём подписку
     if api_refunded_value > Decimal("0.00"):
