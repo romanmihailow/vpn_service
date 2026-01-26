@@ -405,6 +405,25 @@ def get_last_subscriptions(limit: int = 50):
             cur.execute(sql, (limit,))
             return cur.fetchall()
 
+def get_all_telegram_users() -> List[Dict[str, Any]]:
+    """
+    Возвращает список уникальных Telegram-пользователей,
+    которые есть в таблице vpn_subscriptions.
+    Формат элементов списка: {"telegram_user_id": 123456789}
+    """
+    sql = """
+    SELECT DISTINCT telegram_user_id
+    FROM vpn_subscriptions
+    WHERE telegram_user_id IS NOT NULL
+    ORDER BY telegram_user_id;
+    """
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return rows
+
 
 def get_latest_subscription_for_telegram(
     telegram_user_id: int,

@@ -13,10 +13,12 @@ from aiogram.types import (
     CallbackQuery,
     FSInputFile,
 )
+from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
 
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
+
 
 from .config import settings
 from . import db
@@ -88,6 +90,11 @@ class AdminAddSub(StatesGroup):
 
 class DemoRequest(StatesGroup):
     waiting_for_message = State()
+
+
+class Broadcast(StatesGroup):
+    waiting_for_text = State()
+
 
 # Справочник тарифов для оплаты через ЮKassa.
 # Цены указаны в РУБЛЯХ.
@@ -344,8 +351,10 @@ ADMIN_INFO_TEXT = (
     "/admin_deactivate &lt;id&gt; — деактивировать подписку и удалить peer.\n"
     "/admin_delete &lt;id&gt; — полностью удалить подписку из БД и из WireGuard.\n\n"
     "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
-    "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки."
+    "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки.\n\n"
+    "/broadcast — отправить текстовую рассылку всем пользователям."
 )
+
 
 def is_admin(message: Message) -> bool:
     """
@@ -691,7 +700,116 @@ async def cmd_admin_cmd(message: Message) -> None:
         reply_markup=keyboard,
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("broadcast"))
+async def cmd_broadcast(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    await state.set_state(Broadcast.waiting_for_text)
+    await message.answer(
+        "Пришли текст рассылки одним сообщением.\n\n"
+        "⚠️ Внимание: он будет отправлен всем пользователям, которые есть в базе.",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(Broadcast.waiting_for_text)
+async def broadcast_send(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = message.text or ""
+    text = text.strip()
+    if not text:
+        await message.answer("Текст пустой, рассылку отменяю.")
+        await state.clear()
+        return
+
+    await state.clear()
+
+    try:
+        users = db.get_all_telegram_users()
+    except Exception as e:
+        log.error("[Broadcast] Failed to fetch users: %s", repr(e))
+        await message.answer(
+            "Не удалось получить список пользователей для рассылки. Проверь логи сервера.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if not users:
+        await message.answer(
+            "Список пользователей пуст. Некому отправлять рассылку.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    total = len(users)
+    success = 0
+    failed = 0
+
+    await message.answer(
+        f"Начинаю рассылку по {total} пользователям...\n"
+        "Это может занять некоторое время.",
+        disable_web_page_preview=True,
+    )
+
+    for user in users:
+        chat_id = user.get("telegram_user_id")
+        if not chat_id:
+            continue
+
+        try:
+            await message.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                disable_web_page_preview=True,
+            )
+            success += 1
+            await asyncio.sleep(0.05)
+        except TelegramForbiddenError:
+            failed += 1
+            log.warning("[Broadcast] Bot is blocked by chat_id=%s", chat_id)
+            continue
+        except TelegramRetryAfter as e:
+            failed += 1
+            log.warning(
+                "[Broadcast] RetryAfter for chat_id=%s: %s seconds",
+                chat_id,
+                e.retry_after,
+            )
+            await asyncio.sleep(e.retry_after)
+            continue
+        except TelegramBadRequest as e:
+            failed += 1
+            log.warning(
+                "[Broadcast] BadRequest for chat_id=%s: %s",
+                chat_id,
+                repr(e),
+            )
+            continue
+        except Exception as e:
+            failed += 1
+            log.error(
+                "[Broadcast] Unexpected error for chat_id=%s: %s",
+                chat_id,
+                repr(e),
+            )
+            continue
+
+    await message.answer(
+        f"Рассылка завершена.\n"
+        f"Успешно: {success}\n"
+        f"Ошибок: {failed}",
+        disable_web_page_preview=True,
+    )
     
+
 @router.message(Command("admin_last"))
 async def cmd_admin_last(message: Message) -> None:
     if not is_admin(message):
