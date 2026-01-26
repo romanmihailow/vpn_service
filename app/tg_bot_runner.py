@@ -76,6 +76,8 @@ router = Router()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TERMS_FILE_PATH = BASE_DIR / "TERMS.md"
+PRIVACY_FILE_PATH = BASE_DIR / "PRIVACY.md"
+
 
 
 
@@ -334,7 +336,28 @@ async def cmd_terms(message: Message) -> None:
         )
     except Exception as e:
         log.error("Failed to send TERMS.md: %s", repr(e))
+        
 
+@router.message(Command("privacy"))
+async def cmd_privacy(message: Message) -> None:
+    await message.answer(
+        "📄 Политика конфиденциальности MaxNet VPN.\n\n"
+        "Ниже прикреплён файл PRIVACY.md с полной версией политики.",
+        disable_web_page_preview=True,
+    )
+
+    try:
+        doc = FSInputFile(str(PRIVACY_FILE_PATH))
+        await message.answer_document(
+            document=doc,
+            caption="Полная версия политики конфиденциальности в файле PRIVACY.md",
+        )
+    except Exception as e:
+        log.error("Failed to send PRIVACY.md: %s", repr(e))
+        await message.answer(
+            "Не удалось отправить файл PRIVACY.md. Сообщи, пожалуйста, админу.",
+            disable_web_page_preview=True,
+        )
 
 
 ADMIN_INFO_TEXT = (
@@ -1881,9 +1904,11 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
         BotCommand(command="demo", description="Запросить демо-доступ"),
         BotCommand(command="support", description="Связаться с поддержкой"),
+        BotCommand(command="privacy", description="Политика конфиденциальности"),
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 
