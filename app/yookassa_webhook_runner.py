@@ -170,6 +170,69 @@ def parse_yookassa_datetime(dt_str: str) -> datetime | None:
     except Exception:
         return None
 
+async def send_admin_payment_notification(
+    telegram_user_id: int,
+    telegram_user_name: str | None,
+    tariff_code: str,
+    amount: str,
+    expires_at: datetime,
+    is_extension: bool,
+) -> None:
+    """
+    Отправляет админу уведомление о новой оплате / продлении подписки через ЮKassa.
+    """
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if not admin_id:
+        log.warning("[YooKassaWebhook] ADMIN_TELEGRAM_ID is not set, skip admin notification")
+        return
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        log.error("[YooKassaWebhook] TELEGRAM_BOT_TOKEN is not set, cannot send admin notification")
+        return
+
+    if telegram_user_name:
+        username_line = f"@{telegram_user_name}"
+    else:
+        username_line = "—"
+
+    if is_extension:
+        title = "♻️ Продление подписки через ЮKassa"
+    else:
+        title = "💳 Новая платная подписка через ЮKassa"
+
+    text = (
+        f"{title}\n\n"
+        f"Пользователь:\n"
+        f"• TG ID: <code>{telegram_user_id}</code>\n"
+        f"• Username: <code>{username_line}</code>\n\n"
+        f"Тариф: <b>{tariff_code}</b>\n"
+        f"Сумма: <b>{amount} ₽</b>\n"
+        f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S %Z')}</b>\n"
+    )
+
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+        log.info(
+            "[YooKassaWebhook] Sent admin notification for payment tg_id=%s tariff=%s amount=%s",
+            telegram_user_id,
+            tariff_code,
+            amount,
+        )
+    except Exception as e:
+        log.error(
+            "[YooKassaWebhook] Failed to send admin notification for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+    finally:
+        await bot.session.close()
+
+
 async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     """
     Обработчик вебхука ЮKassa.
@@ -762,6 +825,23 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             )
             return web.Response(text="ok (db extend error)")
 
+        # Уведомляем админа о продлении платной подписки
+        try:
+            await send_admin_payment_notification(
+                telegram_user_id=telegram_user_id,
+                telegram_user_name=telegram_user_name,
+                tariff_code=tariff_code,
+                amount=api_amount_value,
+                expires_at=new_expires_at,
+                is_extension=True,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to send admin notification about extension for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+
         # Уведомляем пользователя о продлении без повторной отправки конфига
         try:
             await send_subscription_extended_notification(
@@ -778,6 +858,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             # Не считаем это критичной ошибкой: подписка уже продлена
 
         return web.Response(text="ok (extended)")
+
 
 
     # Если активной YooKassa-подписки нет — работаем по старой схеме:
@@ -896,7 +977,25 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         )
         # Ошибка отправки не должна ломать обработку вебхука
 
+    # Уведомляем админа о новой платной подписке
+    try:
+        await send_admin_payment_notification(
+            telegram_user_id=telegram_user_id,
+            telegram_user_name=telegram_user_name,
+            tariff_code=tariff_code,
+            amount=api_amount_value,
+            expires_at=expires_at,
+            is_extension=False,
+        )
+    except Exception as e:
+        log.error(
+            "[YooKassaWebhook] Failed to send admin notification about new subscription for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+
     return web.Response(text="ok")
+
 
 
 
