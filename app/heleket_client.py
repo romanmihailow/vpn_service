@@ -243,6 +243,9 @@ def send_heleket_test_webhook_payment() -> None:
 
 if __name__ == "__main__":
     print("Running Heleket test webhook sender...")
-    send_heleket_test_webhook_payment()
-    print("Heleket test webhook sender finished.")
+    try:
+        send_heleket_test_webhook_payment()
+        print("Heleket test-webhook sender finished.")
+    except Exception as e:
+        print(f"Heleket test-webhook sender failed: {e!r}")
 
