@@ -1,11 +1,14 @@
 import os
+import json
+import base64
+import hashlib
+
 import requests
 
 from .config import settings
 from .logger import get_heleket_logger
 
 log = get_heleket_logger()
-
 
 
 HELEKET_API_BASE_URL = getattr(
@@ -16,6 +19,28 @@ HELEKET_API_BASE_URL = getattr(
 
 HELEKET_API_KEY = os.getenv("HELEKET_API_KEY")
 HELEKET_MERCHANT_ID = os.getenv("HELEKET_MERCHANT_ID")
+
+
+def _build_heleket_sign(payload: dict) -> str:
+    """
+    Генерация подписи для Heleket API по правилам из документации:
+
+      hash = md5( base64_encode( json_encode(data, JSON_UNESCAPED_UNICODE) ) . apiKey )
+
+    Важно: слэши '/' должны быть экранированы как '\/' перед base64.
+    """
+    # json без пробелов, без ASCII-экранирования
+    json_str = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    # экранируем '/'
+    json_str = json_str.replace("/", "\\/")
+
+    b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
+    to_hash = (b64 + (HELEKET_API_KEY or "")).encode("utf-8")
+    return hashlib.md5(to_hash).hexdigest()
 
 
 def create_heleket_payment(
@@ -52,8 +77,13 @@ def create_heleket_payment(
         },
     }
 
+    # считаем подпись по payload
+    sign = _build_heleket_sign(payload)
+
     headers = {
-        "Authorization": f"Bearer {HELEKET_API_KEY}",
+        # по доке: эти два заголовка ОБЯЗАТЕЛЬНЫ
+        "merchant": HELEKET_MERCHANT_ID,
+        "sign": sign,
         "Content-Type": "application/json",
     }
 
@@ -64,6 +94,18 @@ def create_heleket_payment(
         amount,
         payload["currency"],
         order_id,
+    )
+
+    # логируем URL и заголовки без реального sign
+    safe_headers = {
+        k: ("***" if k.lower() in ("sign",) else v)
+        for k, v in headers.items()
+    }
+    log.info(
+        "[Heleket] Request: url=%s headers=%r payload=%r",
+        api_url,
+        safe_headers,
+        payload,
     )
 
     resp = requests.post(
@@ -92,7 +134,6 @@ def create_heleket_payment(
             e,
         )
         raise RuntimeError("Failed to create Heleket payment (bad JSON).")
-
 
     payment_url = (
         data.get("payment_url")
