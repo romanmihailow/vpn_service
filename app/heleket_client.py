@@ -137,15 +137,31 @@ def create_heleket_payment(
         )
         raise RuntimeError("Failed to create Heleket payment (bad JSON).")
 
+    # Ответ Heleket имеет вид:
+    # {
+    #   "state": 0,
+    #   "result": {
+    #       "url": "...",
+    #       ...
+    #   }
+    # }
+    # Поэтому достаём вложенный result, если он есть.
+    result = data.get("result") if isinstance(data, dict) else None
+    if isinstance(result, dict):
+        result_data = result
+    else:
+        result_data = data
+
     payment_url = (
-        data.get("payment_url")
-        or data.get("url")
-        or data.get("paymentUrl")
+        result_data.get("payment_url")
+        or result_data.get("url")
+        or result_data.get("paymentUrl")
     )
 
     if not payment_url:
         log.error("[Heleket] No payment URL in response: %r", data)
         raise RuntimeError("Heleket API did not return payment URL.")
+
 
     log.info(
         "[Heleket] Payment created order_id=%s url=%s raw=%r",
