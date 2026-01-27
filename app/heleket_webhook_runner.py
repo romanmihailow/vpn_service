@@ -12,10 +12,12 @@ from aiohttp import web
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification
 from .config import settings
-from .logger import get_yookassa_logger  # можно сделать отдельный, но этот уже есть
+from .logger import get_heleket_logger
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
-log = get_yookassa_logger()
+
+log = get_heleket_logger()
+
 
 HELEKET_API_PAYMENT_KEY = os.getenv("HELEKET_API_PAYMENT_KEY")
 

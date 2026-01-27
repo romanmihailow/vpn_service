@@ -7,6 +7,7 @@ import base64
 
 import requests
 from aiohttp import web
+from aiogram import Bot
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification

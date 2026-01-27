@@ -1,9 +1,10 @@
 import requests
 
 from .config import settings
-from .logger import get_logger
+from .logger import get_heleket_logger
 
-log = get_logger()
+log = get_heleket_logger()
+
 
 
 HELEKET_API_BASE_URL = getattr(
