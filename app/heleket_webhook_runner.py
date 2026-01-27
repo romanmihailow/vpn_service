@@ -13,7 +13,7 @@ from aiogram import Bot
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification
 from .config import settings
-from .logger import get_yookassa_logger  # можно сделать отдельный, но этот уже есть
+from .logger import get_heleket_logger
 from .tg_bot_runner import deactivate_existing_active_subscriptions
 
 
