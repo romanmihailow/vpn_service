@@ -8,6 +8,8 @@ import base64
 import requests
 from aiohttp import web
 from aiogram import Bot
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification
@@ -15,6 +17,7 @@ from .config import settings
 
 from .logger import get_yookassa_logger
 from .tg_bot_runner import deactivate_existing_active_subscriptions
+
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID")
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
@@ -211,7 +214,10 @@ async def send_admin_payment_notification(
         f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S %Z')}</b>\n"
     )
 
-    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     try:
         await bot.send_message(
             chat_id=admin_id,
@@ -232,6 +238,7 @@ async def send_admin_payment_notification(
         )
     finally:
         await bot.session.close()
+
 
 
 async def handle_yookassa_webhook(request: web.Request) -> web.Response:

@@ -8,12 +8,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from aiohttp import web
+from aiogram import Bot
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification
 from .config import settings
-from .logger import get_heleket_logger
+from .logger import get_yookassa_logger  # можно сделать отдельный, но этот уже есть
 from .tg_bot_runner import deactivate_existing_active_subscriptions
+
 
 
 log = get_heleket_logger()
@@ -126,7 +128,69 @@ def verify_heleket_signature(raw_body: bytes) -> bool:
     return True
 
 
+async def send_admin_payment_notification_heleket(
+    telegram_user_id: int,
+    tariff_code: str,
+    payment_amount: str | None,
+    currency: str | None,
+    expires_at: datetime,
+    is_extension: bool,
+) -> None:
+    """
+    Отправляет админу уведомление о новой оплате / продлении подписки через Heleket.
+    """
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if not admin_id:
+        log.warning("[HeleketWebhook] ADMIN_TELEGRAM_ID is not set, skip admin notification")
+        return
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        log.error("[HeleketWebhook] TELEGRAM_BOT_TOKEN is not set, cannot send admin notification")
+        return
+
+    amount_line = payment_amount or "—"
+    currency_line = currency or ""
+
+    if is_extension:
+        title = "♻️ Продление подписки через Heleket"
+    else:
+        title = "💳 Новая платная подписка через Heleket"
+
+    text = (
+        f"{title}\n\n"
+        f"Пользователь:\n"
+        f"• TG ID: <code>{telegram_user_id}</code>\n\n"
+        f"Тариф: <b>{tariff_code}</b>\n"
+        f"Сумма: <b>{amount_line} {currency_line}</b>\n"
+        f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S %Z')}</b>\n"
+    )
+
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+    try:
+        await bot.send_message(
+            chat_id=admin_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+        log.info(
+            "[HeleketWebhook] Sent admin notification for payment tg_id=%s tariff=%s amount=%s %s",
+            telegram_user_id,
+            tariff_code,
+            amount_line,
+            currency_line,
+        )
+    except Exception as e:
+        log.error(
+            "[HeleketWebhook] Failed to send admin notification for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+    finally:
+        await bot.session.close()
+
+
 async def handle_heleket_webhook(request: web.Request) -> web.Response:
+
     """
     Обработчик вебхуков Heleket.
 
@@ -293,11 +357,28 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             return web.Response(text="ok (db extend error)")
 
         try:
+            await send_admin_payment_notification_heleket(
+                telegram_user_id=telegram_user_id,
+                tariff_code=tariff_code,
+                payment_amount=str(payment_amount) if payment_amount is not None else None,
+                currency=str(currency) if currency is not None else None,
+                expires_at=new_expires_at,
+                is_extension=True,
+            )
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to send admin notification about extension for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+
+        try:
             await send_subscription_extended_notification(
                 telegram_user_id=telegram_user_id,
                 new_expires_at=new_expires_at,
                 tariff_code=tariff_code,
             )
+
         except Exception as e:
             log.error(
                 "[HeleketWebhook] failed to send extension notification to tg_id=%s: %r",
@@ -412,7 +493,24 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             e,
         )
 
+    try:
+        await send_admin_payment_notification_heleket(
+            telegram_user_id=telegram_user_id,
+            tariff_code=tariff_code,
+            payment_amount=str(payment_amount) if payment_amount is not None else None,
+            currency=str(currency) if currency is not None else None,
+            expires_at=expires_at,
+            is_extension=False,
+        )
+    except Exception as e:
+        log.error(
+            "[HeleketWebhook] failed to send admin notification about new subscription for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+
     return web.Response(text="ok")
+
 
 
 def create_heleket_app() -> web.Application:
