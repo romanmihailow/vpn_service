@@ -75,6 +75,7 @@ def verify_yookassa_basic_auth(request: web.Request) -> bool:
     return shop_id == YOOKASSA_SHOP_ID and secret == YOOKASSA_SECRET_KEY
 
 
+
 import hmac
 import hashlib
 

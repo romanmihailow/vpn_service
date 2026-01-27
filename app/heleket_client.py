@@ -1,3 +1,4 @@
+import os
 import requests
 
 from .config import settings
@@ -13,8 +14,8 @@ HELEKET_API_BASE_URL = getattr(
     "https://api.heleket.com",
 )
 
-HELEKET_API_KEY = getattr(settings, "HELEKET_API_KEY", None)
-HELEKET_MERCHANT_ID = getattr(settings, "HELEKET_MERCHANT_ID", None)
+HELEKET_API_KEY = os.getenv("HELEKET_API_KEY")
+HELEKET_MERCHANT_ID = os.getenv("HELEKET_MERCHANT_ID")
 
 
 def create_heleket_payment(
