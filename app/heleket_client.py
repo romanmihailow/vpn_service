@@ -35,7 +35,7 @@ def create_heleket_payment(
             "HELEKET_API_KEY или HELEKET_MERCHANT_ID не заданы в конфиге.",
         )
 
-    api_url = HELEKET_API_BASE_URL.rstrip("/") + "/payments"
+    api_url = HELEKET_API_BASE_URL.rstrip("/") + "/v1/payment"
 
     order_id = f"maxnet_{telegram_user_id}_{tariff_code}"
 
@@ -73,6 +73,15 @@ def create_heleket_payment(
         timeout=15,
     )
 
+    # сначала проверяем статус, чтобы не пытаться парсить HTML-страницу ошибки как JSON
+    if resp.status_code != 200:
+        log.error(
+            "[Heleket] Non-200 response: status=%s body=%r",
+            resp.status_code,
+            resp.text,
+        )
+        raise RuntimeError(f"Heleket API error: {resp.status_code}")
+
     try:
         data = resp.json()
     except Exception as e:
@@ -84,13 +93,6 @@ def create_heleket_payment(
         )
         raise RuntimeError("Failed to create Heleket payment (bad JSON).")
 
-    if resp.status_code != 200:
-        log.error(
-            "[Heleket] Non-200 response: status=%s body=%r",
-            resp.status_code,
-            data,
-        )
-        raise RuntimeError(f"Heleket API error: {resp.status_code}")
 
     payment_url = (
         data.get("payment_url")
