@@ -2,7 +2,6 @@ import os
 import json
 import base64
 import hashlib
-
 import requests
 
 from .config import settings
@@ -19,6 +18,7 @@ HELEKET_API_BASE_URL = getattr(
 
 HELEKET_API_KEY = os.getenv("HELEKET_API_KEY")
 HELEKET_MERCHANT_ID = os.getenv("HELEKET_MERCHANT_ID")
+
 
 
 def _build_heleket_sign(payload: dict) -> str:
@@ -77,11 +77,21 @@ def create_heleket_payment(
         },
     }
 
-    # считаем подпись по payload
-    sign = _build_heleket_sign(payload)
+    # === формируем подпись по доке Heleket ===
+    # json без sign, как JSON_UNESCAPED_UNICODE в PHP
+    json_str = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),  # без пробелов, как в PHP по умолчанию
+    )
+    # экранируем слэши, как в их примере
+    json_str = json_str.replace("/", "\\/")
+
+    b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
+    raw_to_hash = (b64 + HELEKET_API_KEY).encode("utf-8")
+    sign = hashlib.md5(raw_to_hash).hexdigest()
 
     headers = {
-        # по доке: эти два заголовка ОБЯЗАТЕЛЬНЫ
         "merchant": HELEKET_MERCHANT_ID,
         "sign": sign,
         "Content-Type": "application/json",
@@ -98,7 +108,7 @@ def create_heleket_payment(
 
     # логируем URL и заголовки без реального sign
     safe_headers = {
-        k: ("***" if k.lower() in ("sign",) else v)
+        k: ("***" if k.lower() == "sign" else v)
         for k, v in headers.items()
     }
     log.info(
@@ -153,3 +163,4 @@ def create_heleket_payment(
     )
 
     return payment_url
+
