@@ -187,6 +187,76 @@ def send_heleket_test_webhook_payment() -> None:
     api_url = HELEKET_API_BASE_URL.rstrip("/") + "/v1/test-webhook/payment"
 
     payload = {
+        # можно указать реальный order_id существующего инвойса Heleket,
+        # но для базового теста достаточно любого тестового значения
+        "order_id": "test_maxnet_webhook",
+        "currency": "USDT",
+        "network": "tron",
+        "url_callback": "https://pay.maxnetvpn.ru/heleket/webhook",
+        "status": "paid",
+    }
+
+    # Формируем подпись по доке:
+    # hash = md5( base64_encode( json_encode(data, JSON_UNESCAPED_UNICODE) ) . apiKey )
+    json_str = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    json_str = json_str.replace("/", "\\/")
+
+    b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
+    raw_to_hash = (b64 + (HELEKET_API_KEY or "")).encode("utf-8")
+    sign = hashlib.md5(raw_to_hash).hexdigest()
+
+    headers = {
+        "merchant": HELEKET_MERCHANT_ID,
+        "sign": sign,
+        "Content-Type": "application/json",
+    }
+
+    safe_headers = {
+        k: ("***" if k.lower() == "sign" else v)
+        for k, v in headers.items()
+    }
+    log.info(
+        "[HeleketTestWebhook] Request: url=%s headers=%r payload=%r",
+        api_url,
+        safe_headers,
+        payload,
+    )
+
+    resp = requests.post(
+        api_url,
+        json=payload,
+        headers=headers,
+        timeout=15,
+    )
+
+    log.info(
+        "[HeleketTestWebhook] Response: status=%s body=%r",
+        resp.status_code,
+        resp.text,
+    )
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Heleket test-webhook API error: {resp.status_code}")
+
+
+def send_heleket_test_webhook_payment() -> None:
+    """
+    Отправляет тестовый webhook payment через Heleket API
+    на наш callback /heleket/webhook.
+    Используется только для ручного тестирования.
+    """
+    if not HELEKET_API_KEY or not HELEKET_MERCHANT_ID:
+        raise RuntimeError(
+            "HELEKET_API_KEY или HELEKET_MERCHANT_ID не заданы в конфиге.",
+        )
+
+    api_url = HELEKET_API_BASE_URL.rstrip("/") + "/v1/test-webhook/payment"
+
+    payload = {
         # Можно указать реальный order_id существующего инвойса Heleket.
         # Если оставить любой тестовый — Heleket создаст тестовый инвойс.
         "order_id": "test_maxnet_webhook",
