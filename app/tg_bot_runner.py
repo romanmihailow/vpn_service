@@ -2114,10 +2114,6 @@ async def set_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands(commands)
 
 
-
-
-
-
 async def auto_deactivate_expired_subscriptions() -> None:
     """
     Периодически ищет в базе все активные подписки с истекшим expires_at,
