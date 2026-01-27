@@ -20,14 +20,14 @@ HELEKET_API_KEY = os.getenv("HELEKET_API_KEY")
 HELEKET_MERCHANT_ID = os.getenv("HELEKET_MERCHANT_ID")
 
 
-
-def _build_heleket_sign(payload: dict) -> str:
+def _build_heleket_body_and_sign(payload: dict) -> tuple[str, str]:
     """
-    Генерация подписи для Heleket API по правилам из документации:
+    Готовим JSON-строку ТАК ЖЕ, как Heleket и считает подпись.
 
-      hash = md5( base64_encode( json_encode(data, JSON_UNESCAPED_UNICODE) ) . apiKey )
-
-    Важно: слэши '/' должны быть экранированы как '\/' перед base64.
+    1) json_encode(..., JSON_UNESCAPED_UNICODE)  -> ensure_ascii=False
+    2) без пробелов между ключами и значениями  -> separators=(",", ":")
+    3) экранируем "/" как "\\/" (как в доке для подписи)
+    4) sign = md5( base64_encode(json) . apiKey )
     """
     # json без пробелов, без ASCII-экранирования
     json_str = json.dumps(
@@ -35,12 +35,14 @@ def _build_heleket_sign(payload: dict) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    # экранируем '/'
+    # экранируем "/" -> "\/" (как в их примере)
     json_str = json_str.replace("/", "\\/")
 
     b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
     to_hash = (b64 + (HELEKET_API_KEY or "")).encode("utf-8")
-    return hashlib.md5(to_hash).hexdigest()
+    sign = hashlib.md5(to_hash).hexdigest()
+
+    return json_str, sign
 
 
 def create_heleket_payment(
@@ -77,19 +79,8 @@ def create_heleket_payment(
         },
     }
 
-    # === формируем подпись по доке Heleket ===
-    # json без sign, как JSON_UNESCAPED_UNICODE в PHP
-    json_str = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),  # без пробелов, как в PHP по умолчанию
-    )
-    # экранируем слэши, как в их примере
-    json_str = json_str.replace("/", "\\/")
-
-    b64 = base64.b64encode(json_str.encode("utf-8")).decode("ascii")
-    raw_to_hash = (b64 + HELEKET_API_KEY).encode("utf-8")
-    sign = hashlib.md5(raw_to_hash).hexdigest()
+    # === формируем JSON и подпись по доке Heleket ===
+    json_body, sign = _build_heleket_body_and_sign(payload)
 
     headers = {
         "merchant": HELEKET_MERCHANT_ID,
@@ -118,9 +109,10 @@ def create_heleket_payment(
         payload,
     )
 
+    # ВАЖНО: отправляем РОВНО тот json_body, по которому посчитали подпись
     resp = requests.post(
         api_url,
-        json=payload,
+        data=json_body.encode("utf-8"),
         headers=headers,
         timeout=15,
     )
@@ -163,4 +155,3 @@ def create_heleket_payment(
     )
 
     return payment_url
-
