@@ -228,11 +228,21 @@ def send_heleket_test_webhook_payment() -> None:
         resp.status_code,
         resp.text,
     )
+    # Явный вывод в консоль, чтобы видеть результат при python -m app.heleket_client
+    print(
+        "Heleket test-webhook response:",
+        resp.status_code,
+        resp.text,
+    )
 
     if resp.status_code != 200:
         raise RuntimeError(f"Heleket test-webhook API error: {resp.status_code}")
 
 
 
+
 if __name__ == "__main__":
+    print("Running Heleket test webhook sender...")
     send_heleket_test_webhook_payment()
+    print("Heleket test webhook sender finished.")
+
