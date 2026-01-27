@@ -30,7 +30,9 @@ from .bot import (
 from . import wg
 from .logger import get_logger
 from .yookassa_client import create_yookassa_payment
+from .heleket_client import create_heleket_payment
 log = get_logger()
+
 
 
 
@@ -159,6 +161,41 @@ TARIFF_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+HELEKET_TARIFF_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="1 месяц — 100 ₽",
+                callback_data="heleket:tariff:1m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="3 месяца — 270 ₽",
+                callback_data="heleket:tariff:3m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="6 месяцев — 480 ₽",
+                callback_data="heleket:tariff:6m",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="1 год — 840 ₽",
+                callback_data="heleket:tariff:1y",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="Навсегда — 1990 ₽",
+                callback_data="heleket:tariff:forever",
+            ),
+        ],
+    ]
+)
+
 
 
 
@@ -180,6 +217,12 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
+                text="💰 Оплатить криптой (Heleket)",
+                callback_data="heleket:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="🎁 Запросить демо доступ",
                 callback_data="demo_request",  # изменен callback_data
             ),
@@ -194,9 +237,6 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
-
-
-
 START_TEXT = (
     "MaxNet VPN | Сервис защищённого подключения\n\n"
     "⚡ Подключение к серверам в Европе\n"
@@ -209,18 +249,12 @@ START_TEXT = (
     "Пользовательским соглашением (/terms) и Политикой конфиденциальности (/privacy)."
 )
 
-
-
-
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await message.answer(
         START_TEXT,
         reply_markup=SUBSCRIBE_KEYBOARD,
     )
-
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
@@ -424,11 +458,28 @@ async def cmd_buy(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.message(Command("buy_crypto"))
+async def cmd_buy_crypto(message: Message) -> None:
+    await message.answer(
+        "Выбери тариф для оплаты криптовалютой (Heleket):",
+        reply_markup=HELEKET_TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+
 @router.callback_query(F.data == "pay:open")
 async def pay_open_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Выбери тариф для оплаты через банковскую карту (ЮKassa):",
         reply_markup=TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "heleket:open")
+async def heleket_open_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Выбери тариф для оплаты криптовалютой (Heleket):",
+        reply_markup=HELEKET_TARIFF_KEYBOARD,
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -513,6 +564,67 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Перейди по кнопке ниже на защищённую платёжную страницу ЮKassa.\n\n"
         "После успешной оплаты бот автоматически выдаст доступ к VPN.",
+        reply_markup=pay_keyboard,
+        disable_web_page_preview=True,
+    )
+
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("heleket:tariff:"))
+async def heleket_tariff_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, tariff_code = parts
+    tariff = TARIFFS.get(tariff_code)
+
+    if tariff is None:
+        await callback.answer("Неизвестный тариф.", show_alert=True)
+        return
+
+    if callback.from_user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = callback.from_user.id
+
+    try:
+        payment_url = create_heleket_payment(
+            telegram_user_id=telegram_user_id,
+            tariff_code=tariff_code,
+            amount=tariff["amount"],
+            description=f"MaxNet VPN — {tariff['label']}",
+        )
+    except Exception as e:
+        log.error(
+            "[Heleket] Failed to create payment for tg_id=%s tariff=%s: %s",
+            telegram_user_id,
+            tariff_code,
+            repr(e),
+        )
+        await callback.answer(
+            "Ошибка при создании крипто-платежа. Попробуй позже.",
+            show_alert=True,
+        )
+        return
+
+    pay_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💰 Перейти к оплате в Heleket",
+                    url=payment_url,
+                )
+            ]
+        ]
+    )
+
+    await callback.message.answer(
+        "Перейди по кнопке ниже на платёжную страницу Heleket.\n\n"
+        "После успешной оплаты бот автоматически обработает платёж и выдаст доступ к VPN.",
         reply_markup=pay_keyboard,
         disable_web_page_preview=True,
     )
@@ -1993,6 +2105,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="promo", description="Выгодные варианты подписки"),
         BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
+        BotCommand(command="buy_crypto", description="Оплатить подписку криптой (Heleket)"),
         BotCommand(command="demo", description="Запросить демо-доступ"),
         BotCommand(command="support", description="Связаться с поддержкой"),
         BotCommand(command="privacy", description="Политика конфиденциальности"),

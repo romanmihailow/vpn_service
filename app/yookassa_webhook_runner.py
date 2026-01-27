@@ -1000,11 +1000,20 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
 
 def create_app() -> web.Application:
+    # импортируем обработчик Heleket локально, чтобы не ловить циклические импорты
+    from .heleket_webhook_runner import handle_heleket_webhook
+
     app = web.Application()
     # путь вебхука — совпадает с тем, что ты указал в ЮKassa:
     # https://pay.maxnetvpn.ru/yookassa/webhook
     app.router.add_post("/yookassa/webhook", handle_yookassa_webhook)
+
+    # вебхук для Heleket (оплата криптой):
+    # https://pay.maxnetvpn.ru/heleket/webhook
+    app.router.add_post("/heleket/webhook", handle_heleket_webhook)
+
     return app
+
 
 
 if __name__ == "__main__":
