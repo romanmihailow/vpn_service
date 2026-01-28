@@ -9,6 +9,8 @@ from decimal import Decimal
 
 from aiohttp import web
 from aiogram import Bot
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification
@@ -189,13 +191,17 @@ async def send_admin_payment_notification_heleket(
         f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S %Z')}</b>\n"
     )
 
-    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN, parse_mode="HTML")
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     try:
         await bot.send_message(
             chat_id=admin_id,
             text=text,
             disable_web_page_preview=True,
         )
+
         log.info(
             "[HeleketWebhook] Sent admin notification for payment tg_id=%s tariff=%s amount=%s %s",
             telegram_user_id,
@@ -345,27 +351,38 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         active_subs,
     )
 
+    # Ищем в активных подписках Heleket-подписку (если пользователь уже платил через Heleket)
     heleket_sub = None
     for sub in active_subs:
         if sub.get("channel_name") == "Heleket" or str(sub.get("period", "")).startswith("heleket_"):
             heleket_sub = sub
             break
 
+    # Базовая подписка для продления:
+    # - если уже есть Heleket-подписка — продлеваем её
+    # - иначе, если есть любая другая активная подписка (например, YooKassa) — продлеваем самую "длинную"
+    base_sub = None
     if heleket_sub is not None:
-        # продлеваем существующую Heleket-подписку
-        old_expires_at = heleket_sub["expires_at"]
+        base_sub = heleket_sub
+    elif active_subs:
+        # get_active_subscriptions_for_telegram уже сортирует по expires_at DESC, id DESC
+        base_sub = active_subs[0]
+
+    if base_sub is not None:
+        old_expires_at = base_sub["expires_at"]
         base_dt = old_expires_at if old_expires_at > now else now
         new_expires_at = base_dt + timedelta(days=days)
 
         try:
             db.update_subscription_expiration(
-                sub_id=heleket_sub["id"],
+                sub_id=base_sub["id"],
                 expires_at=new_expires_at,
                 event_name=event_name,
             )
             log.info(
-                "[HeleketWebhook] extended subscription id=%s for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
-                heleket_sub["id"],
+                "[HeleketWebhook] extended subscription id=%s (channel=%s) for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
+                base_sub["id"],
+                base_sub.get("channel_name"),
                 telegram_user_id,
                 old_expires_at,
                 new_expires_at,
@@ -374,7 +391,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         except Exception as e:
             log.error(
                 "[HeleketWebhook] failed to extend subscription id=%s for tg_id=%s: %r",
-                heleket_sub["id"],
+                base_sub["id"],
                 telegram_user_id,
                 e,
             )
@@ -402,7 +419,6 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                 new_expires_at=new_expires_at,
                 tariff_code=tariff_code,
             )
-
         except Exception as e:
             log.error(
                 "[HeleketWebhook] failed to send extension notification to tg_id=%s: %r",
@@ -412,7 +428,8 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
 
         return web.Response(text="ok (extended)")
 
-    # если Heleket-подписки нет — создаём новую, как в YooKassa
+    # если вообще нет активных подписок — создаём новую, как в YooKassa
+
 
     expires_at = now + timedelta(days=days)
 
