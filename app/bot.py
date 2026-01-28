@@ -140,6 +140,7 @@ async def send_subscription_extended_notification(
     telegram_user_id: int,
     new_expires_at: datetime,
     tariff_code: str,
+    payment_channel: str,
 ) -> None:
     """
     Короткое уведомление о продлении подписки без повторной отправки конфига.
@@ -153,7 +154,7 @@ async def send_subscription_extended_notification(
             "✅ Ваша подписка MaxNet VPN продлена.\n\n"
             f"Тариф: <b>{tariff_code}</b>\n"
             f"Доступ активен до: <b>{expires_str}</b>\n\n"
-            "Спасибо за оплату через YooKassa!"
+            "Спасибо за оплату через {payment_channel}!"
         )
 
         await bot.send_message(

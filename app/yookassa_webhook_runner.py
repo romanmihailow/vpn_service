@@ -857,6 +857,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 telegram_user_id=telegram_user_id,
                 new_expires_at=new_expires_at,
                 tariff_code=tariff_code,
+                payment_channel="YooKassa",
             )
         except Exception as e:
             log.error(
