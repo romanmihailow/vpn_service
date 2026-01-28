@@ -273,17 +273,23 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
     uuid = data.get("uuid")
     order_id = data.get("order_id")
     status = data.get("status")
+    payment_status = data.get("payment_status")
     is_final = data.get("is_final")
     currency = data.get("currency")
     payment_amount = data.get("payment_amount")
     additional_data_raw = data.get("additional_data")
 
+    # эффективный статус — в приоритете payment_status, затем status
+    effective_status = payment_status or status
+
     log.info(
-        "[HeleketWebhook] type=%r uuid=%r order_id=%r status=%r is_final=%r currency=%r payment_amount=%r additional_data=%r",
+        "[HeleketWebhook] type=%r uuid=%r order_id=%r status=%r payment_status=%r effective_status=%r is_final=%r currency=%r payment_amount=%r additional_data=%r",
         event_type,
         uuid,
         order_id,
         status,
+        payment_status,
+        effective_status,
         is_final,
         currency,
         payment_amount,
@@ -291,14 +297,20 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
     )
 
     # нас интересуют только финальные успешные платежи
-    if not is_final or status not in ("paid", "paid_over"):
+    # если is_final не пришёл (None) — считаем финальным, если статус уже paid / paid_over
+    is_final_bool = bool(is_final) if is_final is not None else effective_status in ("paid", "paid_over")
+
+    if not is_final_bool or effective_status not in ("paid", "paid_over"):
         log.info(
-            "[HeleketWebhook] ignore non-final or non-paid status uuid=%r status=%r is_final=%r",
+            "[HeleketWebhook] ignore non-final or non-paid status uuid=%r status=%r payment_status=%r effective_status=%r is_final=%r",
             uuid,
             status,
+            payment_status,
+            effective_status,
             is_final,
         )
         return web.Response(text="ok (ignored)")
+
 
     # достаём мету из additional_data
     telegram_user_id = None
