@@ -544,7 +544,7 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
         return
 
     _, _, tariff_code = parts
-    tariff = HELEKET_TARIFFS.get(tariff_code)
+    tariff = TARIFFS.get(tariff_code)
 
     if tariff is None:
         await callback.answer("Неизвестный тариф.", show_alert=True)
@@ -602,7 +602,7 @@ async def heleket_tariff_callback(callback: CallbackQuery) -> None:
         return
 
     _, _, tariff_code = parts
-    tariff = TARIFFS.get(tariff_code)
+    tariff = HELEKET_TARIFFS.get(tariff_code)
 
     if tariff is None:
         await callback.answer("Неизвестный тариф.", show_alert=True)
