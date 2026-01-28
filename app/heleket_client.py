@@ -72,7 +72,7 @@ def create_heleket_payment(
         "amount": amount,
         # при необходимости поменяешь валюту под свои настройки (RUB / USD / USDT и т.п.)
         "currency": "USDT",
-
+        "url_callback": "https://pay.maxnetvpn.ru/heleket/webhook",
         "description": description,
         # Heleket в webhook шлёт поле additional_data как строку.
         # Кладём туда JSON-строку с нужной нам метаинформацией.
@@ -85,6 +85,7 @@ def create_heleket_payment(
             separators=(",", ":"),
         ),
     }
+
 
 
     # === формируем JSON и подпись по доке Heleket ===
