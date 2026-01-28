@@ -763,7 +763,6 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     # Ищем активные НЕ истёкшие подписки этого tg-пользователя
     active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
 
-
     log.info(
         "[YooKassaWebhook] active_subscriptions_for_tg_id=%s: %r",
         telegram_user_id,
@@ -777,6 +776,11 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             yookassa_sub = sub
             break
 
+    # Базовая подписка для продления:
+    # - если есть активная подписка YooKassa — продлеваем её;
+    # - иначе, если есть любая другая активная подписка (например, Heleket) —
+    #   продлеваем самую "длинную" (первая в списке).
+    base_sub = None
 
     if yookassa_sub is not None:
         # Дополнительная защита от ретраев старых платежей:
@@ -785,7 +789,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         last_event_name = str(yookassa_sub.get("last_event_name") or "")
         prefix = "yookassa_payment_succeeded_"
         if last_event_name.startswith(prefix):
-            last_payment_id = last_event_name[len(prefix) :]
+            last_payment_id = last_event_name[len(prefix):]
             if last_payment_id and last_payment_id != payment_id:
                 last_payment = fetch_payment_from_yookassa(last_payment_id)
                 if last_payment:
@@ -802,24 +806,29 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                         )
                         return web.Response(text="ok (stale payment, not extended)")
 
-        # Есть активная подписка YooKassa — продлеваем её, а не создаём новую
-        old_expires_at = yookassa_sub["expires_at"]
+        base_sub = yookassa_sub
+    elif active_subs:
+        # get_active_subscriptions_for_telegram уже сортирует по expires_at DESC, id DESC
+        base_sub = active_subs[0]
+
+    if base_sub is not None:
+        old_expires_at = base_sub["expires_at"]
 
         # Если подписка ещё не истекла — добавляем дни к текущей дате окончания,
         # если вдруг expires_at в прошлом (или почти), считаем от now
         base_dt = old_expires_at if old_expires_at > now else now
         new_expires_at = base_dt + timedelta(days=days)
 
-
         try:
             db.update_subscription_expiration(
-                sub_id=yookassa_sub["id"],
+                sub_id=base_sub["id"],
                 expires_at=new_expires_at,
                 event_name=event_name,
             )
             log.info(
-                "[YooKassaWebhook] Extended subscription id=%s for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
-                yookassa_sub["id"],
+                "[YooKassaWebhook] Extended subscription id=%s (channel=%s) for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
+                base_sub["id"],
+                base_sub.get("channel_name"),
                 telegram_user_id,
                 old_expires_at,
                 new_expires_at,
@@ -828,7 +837,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         except Exception as e:
             log.error(
                 "[YooKassaWebhook] Failed to extend subscription id=%s for tg_id=%s: %r",
-                yookassa_sub["id"],
+                base_sub["id"],
                 telegram_user_id,
                 e,
             )
@@ -871,7 +880,8 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
 
 
-    # Если активной YooKassa-подписки нет — работаем по старой схеме:
+    # Если активной подписки нет вообще — работаем по старой схеме:
+
     # создаём новую подписку, новый peer и шлём конфиг.
 
     # Считаем дату окончания от текущего момента

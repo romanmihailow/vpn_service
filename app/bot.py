@@ -154,7 +154,7 @@ async def send_subscription_extended_notification(
             "✅ Ваша подписка MaxNet VPN продлена.\n\n"
             f"Тариф: <b>{tariff_code}</b>\n"
             f"Доступ активен до: <b>{expires_str}</b>\n\n"
-            "Спасибо за оплату через {payment_channel}!"
+            f"Спасибо за оплату через {payment_channel}!"
         )
 
         await bot.send_message(
