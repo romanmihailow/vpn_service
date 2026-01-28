@@ -73,11 +73,18 @@ def create_heleket_payment(
         # при необходимости поменяешь валюту под свои настройки (RUB / USD / USDT и т.п.)
         "currency": "USD",
         "description": description,
-        "metadata": {
-            "telegram_user_id": str(telegram_user_id),
-            "tariff_code": tariff_code,
-        },
+        # Heleket в webhook шлёт поле additional_data как строку.
+        # Кладём туда JSON-строку с нужной нам метаинформацией.
+        "additional_data": json.dumps(
+            {
+                "telegram_user_id": str(telegram_user_id),
+                "tariff_code": tariff_code,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
     }
+
 
     # === формируем JSON и подпись по доке Heleket ===
     json_body, sign = _build_heleket_body_and_sign(payload)

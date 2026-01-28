@@ -52,7 +52,21 @@ def verify_heleket_ip(request: web.Request) -> bool:
     """
     Heleket официально шлёт webhook только с IP 31.133.220.8.
     """
+
     trusted_ip = "31.133.220.8"
+
+    # Режим отладки: если включена переменная окружения,
+    # пропускаем проверку IP (для локальных тестов curl).
+    if os.getenv("HELEKET_WEBHOOK_DISABLE_IP_CHECK") == "1":
+        log.warning(
+            "[HeleketWebhook] IP check is disabled by HELEKET_WEBHOOK_DISABLE_IP_CHECK=1, "
+            "request from=%r X-Real-IP=%r X-Forwarded-For=%r (trusted=%s)",
+            request.remote,
+            request.headers.get("X-Real-IP"),
+            request.headers.get("X-Forwarded-For"),
+            trusted_ip,
+        )
+        return True
 
     x_real_ip = request.headers.get("X-Real-IP")
     x_forwarded_for = request.headers.get("X-Forwarded-For")
@@ -79,6 +93,7 @@ def verify_heleket_ip(request: web.Request) -> bool:
     return False
 
 
+
 def verify_heleket_signature(raw_body: bytes) -> bool:
     """
     Проверка подписи Heleket webhook.
@@ -90,6 +105,13 @@ def verify_heleket_signature(raw_body: bytes) -> bool:
     """
     if not HELEKET_API_PAYMENT_KEY:
         log.error("[HeleketWebhook] HELEKET_API_PAYMENT_KEY is not set")
+        # В отладочном режиме можно временно отключить проверку подписи.
+        if os.getenv("HELEKET_WEBHOOK_DISABLE_SIGNATURE_CHECK") == "1":
+            log.warning(
+                "[HeleketWebhook] Signature check is disabled by "
+                "HELEKET_WEBHOOK_DISABLE_SIGNATURE_CHECK=1 while HELEKET_API_PAYMENT_KEY is not set"
+            )
+            return True
         return False
 
     try:
@@ -126,6 +148,7 @@ def verify_heleket_signature(raw_body: bytes) -> bool:
         return False
 
     return True
+
 
 
 async def send_admin_payment_notification_heleket(
