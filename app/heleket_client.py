@@ -2,13 +2,13 @@ import os
 import json
 import base64
 import hashlib
+import time
 import requests
 
 from .config import settings
 from .logger import get_heleket_logger
 
 log = get_heleket_logger()
-
 
 HELEKET_API_BASE_URL = getattr(
     settings,
@@ -64,7 +64,7 @@ def create_heleket_payment(
 
     api_url = HELEKET_API_BASE_URL.rstrip("/") + "/v1/payment"
 
-    order_id = f"maxnet_{telegram_user_id}_{tariff_code}"
+    order_id = f"maxnet_{telegram_user_id}_{tariff_code}_{int(time.time())}"
 
     payload = {
         "merchant_id": HELEKET_MERCHANT_ID,
@@ -72,6 +72,7 @@ def create_heleket_payment(
         "amount": amount,
         # при необходимости поменяешь валюту под свои настройки (RUB / USD / USDT и т.п.)
         "currency": "USDT",
+
         "description": description,
         # Heleket в webhook шлёт поле additional_data как строку.
         # Кладём туда JSON-строку с нужной нам метаинформацией.
