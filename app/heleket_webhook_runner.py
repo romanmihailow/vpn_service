@@ -279,15 +279,6 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
     payment_amount = data.get("payment_amount")
     additional_data_raw = data.get("additional_data")
 
-    # Пытаемся вытащить timestamp из order_id, который мы сами задавали как
-    # maxnet_{telegram_user_id}_{tariff_code}_{int(time.time())}
-    order_ts = None
-    if isinstance(order_id, str):
-        try:
-            order_ts_part = order_id.rsplit("_", 1)[-1]
-            order_ts = int(order_ts_part)
-        except Exception:
-            order_ts = None
 
 
     # эффективный статус — в приоритете payment_status, затем status
@@ -353,14 +344,9 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         log.error("[HeleketWebhook] unknown tariff_code=%r", tariff_code)
         return web.Response(text="ok (unknown tariff)")
 
-    # идемпотентность по uuid (учитываем старый и новый формат event_name)
-    legacy_event_name = f"heleket_payment_paid_{uuid}"
-    if order_ts is not None:
-        event_name = f"{legacy_event_name}_{order_ts}"
-    else:
-        event_name = legacy_event_name
-
-    if uuid and (db.subscription_exists_by_event(event_name) or db.subscription_exists_by_event(legacy_event_name)):
+    # идемпотентность по uuid
+    event_name = f"heleket_payment_paid_{uuid}"
+    if uuid and db.subscription_exists_by_event(event_name):
         log.info(
             "[HeleketWebhook] payment uuid=%s already processed (event_name=%s)",
             uuid,
@@ -369,6 +355,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         return web.Response(text="ok (already processed)")
 
     now = datetime.now(timezone.utc)
+
 
 
     # ищем активные подписки этого пользователя
@@ -392,40 +379,11 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
     # - иначе, если есть любая другая активная подписка (например, YooKassa) — продлеваем самую "длинную"
     base_sub = None
     if heleket_sub is not None:
-        # Анти-ретрай / защита от старых платежей Heleket:
-        # если в last_event_name есть timestamp более новый, чем у текущего order_id,
-        # то считаем платёж "устаревшим" и не продлеваем подписку ещё раз.
-        if order_ts is not None:
-            try:
-                last_event_name = str(heleket_sub.get("last_event_name") or "")
-                prefix = "heleket_payment_paid_"
-                last_ts = None
-
-                if last_event_name.startswith(prefix):
-                    # ожидаем формат "heleket_payment_paid_{uuid}_{ts}"
-                    parts = last_event_name.rsplit("_", 1)
-                    if len(parts) == 2:
-                        last_ts = int(parts[1])
-                if last_ts is not None and order_ts <= last_ts:
-                    log.warning(
-                        "[HeleketWebhook] stale payment uuid=%s order_ts=%s, last_ts=%s for subscription id=%s — skip extension",
-                        uuid,
-                        order_ts,
-                        last_ts,
-                        heleket_sub.get("id"),
-                    )
-                    return web.Response(text="ok (stale payment, not extended)")
-            except Exception as e:
-                log.error(
-                    "[HeleketWebhook] failed to check stale Heleket payment for subscription id=%s: %r",
-                    heleket_sub.get("id"),
-                    e,
-                )
-
         base_sub = heleket_sub
     elif active_subs:
         # get_active_subscriptions_for_telegram уже сортирует по expires_at DESC, id DESC
         base_sub = active_subs[0]
+
 
 
     if base_sub is not None:
