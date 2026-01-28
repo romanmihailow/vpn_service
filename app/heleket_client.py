@@ -71,7 +71,7 @@ def create_heleket_payment(
         "order_id": order_id,
         "amount": amount,
         # при необходимости поменяешь валюту под свои настройки (RUB / USD / USDT и т.п.)
-        "currency": "USD",
+        "currency": "USDT",
         "description": description,
         # Heleket в webhook шлёт поле additional_data как строку.
         # Кладём туда JSON-строку с нужной нам метаинформацией.

@@ -123,8 +123,30 @@ TARIFFS = {
     },
 }
 
-
-
+# Справочник тарифов для оплаты через Heleket.
+# Цены указаны в ДОЛЛАРАХ (USDT по факту).
+HELEKET_TARIFFS = {
+    "1m": {
+        "amount": "1.00",
+        "label": "1 месяц — 1 $",
+    },
+    "3m": {
+        "amount": "3.00",
+        "label": "3 месяца — 3 $",
+    },
+    "6m": {
+        "amount": "6.00",
+        "label": "6 месяцев — 6 $",
+    },
+    "1y": {
+        "amount": "12.00",
+        "label": "1 год — 12 $",
+    },
+    "forever": {
+        "amount": "25.00",
+        "label": "Навсегда — 25 $",
+    },
+}
 
 TARIFF_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -165,36 +187,37 @@ HELEKET_TARIFF_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="1 месяц — 100 ₽",
+                text="1 месяц — 1 $",
                 callback_data="heleket:tariff:1m",
             ),
         ],
         [
             InlineKeyboardButton(
-                text="3 месяца — 270 ₽",
+                text="3 месяца — 3 $",
                 callback_data="heleket:tariff:3m",
             ),
         ],
         [
             InlineKeyboardButton(
-                text="6 месяцев — 480 ₽",
+                text="6 месяцев — 6 $",
                 callback_data="heleket:tariff:6m",
             ),
         ],
         [
             InlineKeyboardButton(
-                text="1 год — 840 ₽",
+                text="1 год — 12 $",
                 callback_data="heleket:tariff:1y",
             ),
         ],
         [
             InlineKeyboardButton(
-                text="Навсегда — 1990 ₽",
+                text="Навсегда — 25 $",
                 callback_data="heleket:tariff:forever",
             ),
         ],
     ]
 )
+
 
 
 
@@ -521,7 +544,7 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
         return
 
     _, _, tariff_code = parts
-    tariff = TARIFFS.get(tariff_code)
+    tariff = HELEKET_TARIFFS.get(tariff_code)
 
     if tariff is None:
         await callback.answer("Неизвестный тариф.", show_alert=True)
