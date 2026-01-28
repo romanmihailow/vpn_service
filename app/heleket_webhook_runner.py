@@ -94,6 +94,7 @@ def verify_heleket_ip(request: web.Request) -> bool:
 
 
 
+
 def verify_heleket_signature(raw_body: bytes) -> bool:
     """
     Проверка подписи Heleket webhook.
