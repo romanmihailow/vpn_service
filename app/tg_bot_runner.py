@@ -31,6 +31,11 @@ from . import wg
 from .logger import get_logger
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
+from .promo_codes import (
+    PromoGenerationParams,
+    generate_promo_codes,
+    build_insert_sql_for_postgres,
+)
 log = get_logger()
 
 
@@ -102,6 +107,18 @@ class PromoStates(StatesGroup):
     waiting_for_code = State()
 
 
+class PromoAdmin(StatesGroup):
+    """
+    FSM для админского мастера генерации промокодов.
+    """
+    waiting_for_mode = State()
+    waiting_for_extra_days = State()
+    waiting_for_valid_days = State()
+    waiting_for_code_count = State()      # для одноразовых
+    waiting_for_manual_code = State()     # для многоразового
+    waiting_for_max_uses = State()        # для многоразового
+    waiting_for_per_user_limit = State()  # для многоразового
+    waiting_for_comment = State()
 
 
 # Справочник тарифов для оплаты через ЮKassa.
@@ -423,8 +440,10 @@ ADMIN_INFO_TEXT = (
     "/admin_delete &lt;id&gt; — полностью удалить подписку из БД и из WireGuard.\n\n"
     "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
     "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки.\n\n"
-    "/broadcast — отправить текстовую рассылку всем пользователям."
+    "/broadcast — отправить текстовую рассылку всем пользователям.\n\n"
+    "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes."
 )
+
 
 
 def is_admin(message: Message) -> bool:
@@ -564,6 +583,374 @@ async def cmd_demo(message: Message, state: FSMContext) -> None:
         "Я перешлю твой текст админу, и он решит, выдавать ли демо-доступ.",
         disable_web_page_preview=True,
     )
+
+@router.callback_query(PromoAdmin.waiting_for_mode, F.data.startswith("promo_admin:mode:"))
+async def promo_admin_choose_mode(callback: CallbackQuery, state: FSMContext) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, mode = parts
+    if mode not in ("multi", "single"):
+        await callback.answer("Неизвестный режим промокода.", show_alert=True)
+        return
+
+    await state.update_data(mode=mode)
+
+    # убираем клаву выбора режима
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.error("[PromoAdmin] Failed to clear mode keyboard: %s", repr(e))
+
+    await state.set_state(PromoAdmin.waiting_for_extra_days)
+    await callback.message.answer(
+        "Шаг 1/5.\n\n"
+        "Сколько <b>дополнительных дней</b> даёт промокод?\n"
+        "Отправь целое число &gt; 0 (например: <code>7</code>).",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@router.message(PromoAdmin.waiting_for_extra_days)
+async def promo_admin_extra_days(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        extra_days = int(text)
+    except ValueError:
+        await message.answer(
+            "Нужно целое число дней &gt; 0. Например: <code>7</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if extra_days <= 0:
+        await message.answer(
+            "Число дней должно быть &gt; 0. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(extra_days=extra_days)
+    await state.set_state(PromoAdmin.waiting_for_valid_days)
+    await message.answer(
+        "Шаг 2/5.\n\n"
+        "На сколько дней сделать промокод <b>действительным</b> с текущего момента?\n"
+        "Отправь целое число дней (например: <code>30</code>).\n"
+        "Если хочешь без ограничения по дате — отправь <code>0</code>.",
+        disable_web_page_preview=True,
+    )
+
+@router.message(PromoAdmin.waiting_for_valid_days)
+async def promo_admin_valid_days(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        valid_days = int(text)
+    except ValueError:
+        await message.answer(
+            "Нужно целое число дней (0 или больше). Например: <code>30</code> или <code>0</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if valid_days < 0:
+        await message.answer(
+            "Число дней не может быть отрицательным. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(valid_days=valid_days)
+    data = await state.get_data()
+    mode = data.get("mode")
+
+    if mode == "single":
+        await state.set_state(PromoAdmin.waiting_for_code_count)
+        await message.answer(
+            "Шаг 3/5.\n\n"
+            "Сколько <b>одноразовых</b> промокодов нужно сгенерировать?\n"
+            "Отправь целое число &gt; 0 (например: <code>20</code>).",
+            disable_web_page_preview=True,
+        )
+    elif mode == "multi":
+        await state.set_state(PromoAdmin.waiting_for_manual_code)
+        await message.answer(
+            "Шаг 3/5.\n\n"
+            "Введи <b>имя многоразового промокода</b>.\n"
+            "Допускаются буквы/цифры, пробелы будут автоматически заменены на подчёркивания.\n"
+            "Например: <code>MAXNET7DAYS</code> или <code>MAXNET FRIENDS</code>.",
+            disable_web_page_preview=True,
+        )
+    else:
+        await message.answer(
+            "Режим промокода не определён. Начни заново с /promo_admin.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+
+@router.message(PromoAdmin.waiting_for_code_count)
+async def promo_admin_code_count(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        code_count = int(text)
+    except ValueError:
+        await message.answer(
+            "Нужно целое число &gt; 0. Например: <code>20</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if code_count <= 0:
+        await message.answer(
+            "Число кодов должно быть &gt; 0. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(code_count=code_count)
+    await state.set_state(PromoAdmin.waiting_for_comment)
+    await message.answer(
+        "Шаг 4/5.\n\n"
+        "Добавь комментарий для этих промокодов (для себя / других админов).\n"
+        "Например: <code>Розыгрыш в чате 01.03</code>.\n\n"
+        "Если комментарий не нужен — отправь <code>-</code>.",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(PromoAdmin.waiting_for_manual_code)
+async def promo_admin_manual_code(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    manual_code = (message.text or "").strip()
+    if not manual_code:
+        await message.answer(
+            "Имя промокода не должно быть пустым. Введи что-нибудь, например: <code>MAXNET7DAYS</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(manual_code=manual_code)
+    await state.set_state(PromoAdmin.waiting_for_max_uses)
+    await message.answer(
+        "Шаг 4/5.\n\n"
+        "Укажи <b>общий лимит использований</b> этого промокода.\n"
+        "Например: <code>100</code>.\n"
+        "Если не хочешь ограничивать общее число применений — отправь <code>0</code>.",
+        disable_web_page_preview=True,
+    )
+
+@router.message(PromoAdmin.waiting_for_max_uses)
+async def promo_admin_max_uses(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        max_uses_raw = int(text)
+    except ValueError:
+        await message.answer(
+            "Нужно целое число ≥ 0. Например: <code>100</code> или <code>0</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if max_uses_raw < 0:
+        await message.answer(
+            "Число не может быть отрицательным. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    max_uses = None if max_uses_raw == 0 else max_uses_raw
+    await state.update_data(max_uses=max_uses)
+
+    await state.set_state(PromoAdmin.waiting_for_per_user_limit)
+    await message.answer(
+        "Шаг 5/7.\n\n"
+        "Сколько раз <b>один пользователь</b> может применить этот промокод?\n"
+        "Отправь целое число &gt; 0. Например: <code>1</code>.",
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(PromoAdmin.waiting_for_per_user_limit)
+async def promo_admin_per_user_limit(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    try:
+        per_user_limit = int(text)
+    except ValueError:
+        await message.answer(
+            "Нужно целое число &gt; 0. Например: <code>1</code> или <code>3</code>.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if per_user_limit <= 0:
+        await message.answer(
+            "Число должно быть &gt; 0. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await state.update_data(per_user_limit=per_user_limit)
+    await state.set_state(PromoAdmin.waiting_for_comment)
+    await message.answer(
+        "Шаг 6/7.\n\n"
+        "Добавь комментарий для этого промокода (для себя / других админов).\n"
+        "Например: <code>Промо-день рождения сервиса</code>.\n\n"
+        "Если комментарий не нужен — отправь <code>-</code>.",
+        disable_web_page_preview=True,
+    )
+
+@router.message(PromoAdmin.waiting_for_comment)
+async def promo_admin_comment_and_generate(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        await state.clear()
+        return
+
+    comment_raw = (message.text or "").strip()
+    comment = None if comment_raw == "-" else comment_raw
+
+    data = await state.get_data()
+    mode = data.get("mode")
+    extra_days = data.get("extra_days")
+    valid_days = data.get("valid_days")
+
+    if extra_days is None or valid_days is None or mode not in ("single", "multi"):
+        await message.answer(
+            "Не удалось собрать параметры промокода. Начни заново с /promo_admin.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", None)
+
+    try:
+        if mode == "single":
+            code_count = data.get("code_count")
+            if not code_count:
+                await message.answer(
+                    "Не найдено количество одноразовых кодов. Начни заново с /promo_admin.",
+                    disable_web_page_preview=True,
+                )
+                await state.clear()
+                return
+
+            params = PromoGenerationParams(
+                action_type="extra_days",
+                extra_days=extra_days,
+                is_multi_use=False,
+                code_count=code_count,
+                manual_code=None,
+                valid_days=valid_days,
+                max_uses=None,
+                per_user_limit=1,
+                tariff_scope="all",
+                allowed_tariffs=None,
+                allowed_telegram_id=None,
+                comment=comment,
+                created_by_admin_id=admin_id,
+                code_length=10,
+            )
+        else:
+            manual_code = data.get("manual_code")
+            max_uses = data.get("max_uses")
+            per_user_limit = data.get("per_user_limit")
+
+            if not manual_code or per_user_limit is None:
+                await message.answer(
+                    "Не все параметры многоразового промокода заданы. Начни заново с /promo_admin.",
+                    disable_web_page_preview=True,
+                )
+                await state.clear()
+                return
+
+            params = PromoGenerationParams(
+                action_type="extra_days",
+                extra_days=extra_days,
+                is_multi_use=True,
+                code_count=1,
+                manual_code=manual_code,
+                valid_days=valid_days,
+                max_uses=max_uses,
+                per_user_limit=per_user_limit,
+                tariff_scope="all",
+                allowed_tariffs=None,
+                allowed_telegram_id=None,
+                comment=comment,
+                created_by_admin_id=admin_id,
+                code_length=10,
+            )
+
+        promo_rows = generate_promo_codes(params)
+        sql = build_insert_sql_for_postgres(promo_rows, table_name="promo_codes")
+
+    except Exception as e:
+        log.error("[PromoAdmin] Failed to generate promo codes: %s", repr(e))
+        await message.answer(
+            "Произошла ошибка при генерации промокодов. Подробности смотри в логах.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    await state.clear()
+
+    if mode == "single":
+        header = (
+            f"✅ Сгенерировано <b>{len(promo_rows)}</b> одноразовых промокодов.\n"
+            "Ниже — SQL для вставки в таблицу <code>promo_codes</code>:\n\n"
+        )
+    else:
+        code_preview = promo_rows[0].get("code")
+        header = (
+            "✅ Сгенерирован многоразовый промокод.\n"
+            f"Код: <code>{code_preview}</code>\n\n"
+            "Ниже — SQL для вставки в таблицу <code>promo_codes</code>:\n\n"
+        )
+
+    # Отправляем SQL одним сообщением в виде кода
+    await message.answer(
+        header + f"<code>{sql}</code>",
+        disable_web_page_preview=True,
+    )
+
 
 
 @router.callback_query(F.data == "demo_request")
@@ -983,6 +1370,47 @@ async def cmd_broadcast(message: Message, state: FSMContext) -> None:
         "⚠️ Внимание: он будет отправлен всем пользователям, которые есть в базе.",
         disable_web_page_preview=True,
     )
+
+@router.message(Command("promo_admin"))
+async def cmd_promo_admin(message: Message, state: FSMContext) -> None:
+    """
+    Запускает мастер генерации промокодов для администратора.
+    В конце бот отдаст SQL INSERT, который можно вставить в БД.
+    """
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    await state.clear()
+    await state.set_state(PromoAdmin.waiting_for_mode)
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="♾ Многоразовый промокод (ручное имя)",
+                    callback_data="promo_admin:mode:multi",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔑 Несколько одноразовых кодов",
+                    callback_data="promo_admin:mode:single",
+                ),
+            ],
+        ]
+    )
+
+    await message.answer(
+        "Мастер генерации промокодов.\n\n"
+        "Выбери тип промокода:\n"
+        "• ♾ Многоразовый код (одно имя, лимиты по использованию).\n"
+        "• 🔑 Пачка одноразовых случайных кодов.\n\n"
+        "Нажми на нужный вариант ниже.",
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
 
 
 @router.message(Broadcast.waiting_for_text)
