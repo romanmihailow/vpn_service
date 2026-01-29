@@ -1,8 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-
-
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
 from aiogram.types import (
@@ -14,12 +12,9 @@ from aiogram.types import (
     FSInputFile,
 )
 from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError, TelegramBadRequest
-
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-
-
 from .config import settings
 from . import db
 from .bot import (
@@ -28,7 +23,7 @@ from .bot import (
     send_subscription_expired_notification,
 )
 from . import wg
-from .logger import get_logger
+from .logger import get_logger, get_promo_logger
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
 from .promo_codes import (
@@ -37,9 +32,7 @@ from .promo_codes import (
     build_insert_sql_for_postgres,
 )
 log = get_logger()
-
-
-
+promo_log = get_promo_logger()
 
 
 def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
@@ -80,14 +73,11 @@ def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str)
                 )
 
 
-
 router = Router()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TERMS_FILE_PATH = BASE_DIR / "TERMS.md"
 PRIVACY_FILE_PATH = BASE_DIR / "PRIVACY.md"
-
-
 
 
 class AdminAddSub(StatesGroup):
@@ -119,6 +109,7 @@ class PromoAdmin(StatesGroup):
     waiting_for_max_uses = State()        # для многоразового
     waiting_for_per_user_limit = State()  # для многоразового
     waiting_for_comment = State()
+    waiting_for_confirm = State()
 
 
 # Справочник тарифов для оплаты через ЮKassa.
@@ -612,7 +603,7 @@ async def promo_admin_choose_mode(callback: CallbackQuery, state: FSMContext) ->
 
     await state.set_state(PromoAdmin.waiting_for_extra_days)
     await callback.message.answer(
-        "Шаг 1/5.\n\n"
+        "Шаг 1.\n\n"
         "Сколько <b>дополнительных дней</b> даёт промокод?\n"
         "Отправь целое число &gt; 0 (например: <code>7</code>).",
         disable_web_page_preview=True,
@@ -647,12 +638,13 @@ async def promo_admin_extra_days(message: Message, state: FSMContext) -> None:
     await state.update_data(extra_days=extra_days)
     await state.set_state(PromoAdmin.waiting_for_valid_days)
     await message.answer(
-        "Шаг 2/5.\n\n"
+        "Шаг 2.\n\n"
         "На сколько дней сделать промокод <b>действительным</b> с текущего момента?\n"
         "Отправь целое число дней (например: <code>30</code>).\n"
         "Если хочешь без ограничения по дате — отправь <code>0</code>.",
         disable_web_page_preview=True,
     )
+
 
 @router.message(PromoAdmin.waiting_for_valid_days)
 async def promo_admin_valid_days(message: Message, state: FSMContext) -> None:
@@ -685,20 +677,22 @@ async def promo_admin_valid_days(message: Message, state: FSMContext) -> None:
     if mode == "single":
         await state.set_state(PromoAdmin.waiting_for_code_count)
         await message.answer(
-            "Шаг 3/5.\n\n"
+            "Шаг 3.\n\n"
             "Сколько <b>одноразовых</b> промокодов нужно сгенерировать?\n"
             "Отправь целое число &gt; 0 (например: <code>20</code>).",
             disable_web_page_preview=True,
         )
+
     elif mode == "multi":
         await state.set_state(PromoAdmin.waiting_for_manual_code)
         await message.answer(
-            "Шаг 3/5.\n\n"
+            "Шаг 3.\n\n"
             "Введи <b>имя многоразового промокода</b>.\n"
             "Допускаются буквы/цифры, пробелы будут автоматически заменены на подчёркивания.\n"
             "Например: <code>MAXNET7DAYS</code> или <code>MAXNET FRIENDS</code>.",
             disable_web_page_preview=True,
         )
+
     else:
         await message.answer(
             "Режим промокода не определён. Начни заново с /promo_admin.",
@@ -733,7 +727,7 @@ async def promo_admin_code_count(message: Message, state: FSMContext) -> None:
     await state.update_data(code_count=code_count)
     await state.set_state(PromoAdmin.waiting_for_comment)
     await message.answer(
-        "Шаг 4/5.\n\n"
+        "Шаг 4.\n\n"
         "Добавь комментарий для этих промокодов (для себя / других админов).\n"
         "Например: <code>Розыгрыш в чате 01.03</code>.\n\n"
         "Если комментарий не нужен — отправь <code>-</code>.",
@@ -759,12 +753,13 @@ async def promo_admin_manual_code(message: Message, state: FSMContext) -> None:
     await state.update_data(manual_code=manual_code)
     await state.set_state(PromoAdmin.waiting_for_max_uses)
     await message.answer(
-        "Шаг 4/5.\n\n"
+        "Шаг 4.\n\n"
         "Укажи <b>общий лимит использований</b> этого промокода.\n"
         "Например: <code>100</code>.\n"
         "Если не хочешь ограничивать общее число применений — отправь <code>0</code>.",
         disable_web_page_preview=True,
     )
+
 
 @router.message(PromoAdmin.waiting_for_max_uses)
 async def promo_admin_max_uses(message: Message, state: FSMContext) -> None:
@@ -795,7 +790,7 @@ async def promo_admin_max_uses(message: Message, state: FSMContext) -> None:
 
     await state.set_state(PromoAdmin.waiting_for_per_user_limit)
     await message.answer(
-        "Шаг 5/7.\n\n"
+        "Шаг 5.\n\n"
         "Сколько раз <b>один пользователь</b> может применить этот промокод?\n"
         "Отправь целое число &gt; 0. Например: <code>1</code>.",
         disable_web_page_preview=True,
@@ -829,7 +824,7 @@ async def promo_admin_per_user_limit(message: Message, state: FSMContext) -> Non
     await state.update_data(per_user_limit=per_user_limit)
     await state.set_state(PromoAdmin.waiting_for_comment)
     await message.answer(
-        "Шаг 6/7.\n\n"
+        "Шаг 6.\n\n"
         "Добавь комментарий для этого промокода (для себя / других админов).\n"
         "Например: <code>Промо-день рождения сервиса</code>.\n\n"
         "Если комментарий не нужен — отправь <code>-</code>.",
@@ -843,8 +838,10 @@ async def promo_admin_comment_and_generate(message: Message, state: FSMContext) 
         await state.clear()
         return
 
+    # сохраняем комментарий в state
     comment_raw = (message.text or "").strip()
     comment = None if comment_raw == "-" else comment_raw
+    await state.update_data(comment=comment)
 
     data = await state.get_data()
     mode = data.get("mode")
@@ -859,17 +856,155 @@ async def promo_admin_comment_and_generate(message: Message, state: FSMContext) 
         await state.clear()
         return
 
+    # готовим человекочитаемое описание срока действия
+    if valid_days == 0:
+        valid_text = "без ограничения по дате (неограниченный срок действия)"
+    else:
+        valid_text = f"{valid_days} дн. с момента создания"
+
+    summary_lines = [
+        "🧩 <b>Параметры промокода</b>\n",
+        f"• Дополнительные дни подписки: <b>{extra_days}</b>",
+        f"• Срок действия промокода: <b>{valid_text}</b>",
+    ]
+
+    if mode == "single":
+        code_count = data.get("code_count")
+        if not code_count:
+            await message.answer(
+                "Не найдено количество одноразовых кодов. Начни заново с /promo_admin.",
+                disable_web_page_preview=True,
+            )
+            await state.clear()
+            return
+
+        summary_lines.append("• Тип: <b>несколько одноразовых кодов</b>")
+        summary_lines.append(f"• Количество кодов: <b>{code_count}</b>")
+    else:
+        manual_code = data.get("manual_code")
+        max_uses = data.get("max_uses")
+        per_user_limit = data.get("per_user_limit")
+
+        if not manual_code or per_user_limit is None:
+            await message.answer(
+                "Не все параметры многоразового промокода заданы. Начни заново с /promo_admin.",
+                disable_web_page_preview=True,
+            )
+            await state.clear()
+            return
+
+        if max_uses is None:
+            max_uses_text = "без ограничения по общему числу использований"
+        else:
+            max_uses_text = f"{max_uses} раз"
+
+        summary_lines.append("• Тип: <b>многоразовый промокод</b>")
+        summary_lines.append(f"• Имя промокода: <code>{manual_code}</code>")
+        summary_lines.append(f"• Общий лимит использований: <b>{max_uses_text}</b>")
+        summary_lines.append(
+            f"• Лимит на одного пользователя: <b>{per_user_limit} раз(а)</b>"
+        )
+
+    if comment:
+        summary_lines.append(f"• Комментарий: <i>{comment}</i>")
+    else:
+        summary_lines.append("• Комментарий: <i>нет</i>")
+
+    text = (
+        "\n".join(summary_lines)
+        + "\n\n"
+        "Если всё верно — подтверди генерацию промокодов.\n"
+        "Или отменись, если нужно начать заново."
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Сгенерировать и сохранить в БД",
+                    callback_data="promo_admin:confirm:yes",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить",
+                    callback_data="promo_admin:confirm:cancel",
+                ),
+            ],
+        ]
+    )
+
+    await state.set_state(PromoAdmin.waiting_for_confirm)
+    await message.answer(
+        text,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(PromoAdmin.waiting_for_confirm, F.data.startswith("promo_admin:confirm:"))
+async def promo_admin_confirm_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if callback.from_user is None or callback.from_user.id != admin_id:
+        await callback.answer("Эта кнопка только для администратора.", show_alert=True)
+        return
+
+    data_raw = callback.data or ""
+    parts = data_raw.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, action = parts
+
+    # убираем клавиатуру подтверждения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        log.error("[PromoAdmin] Failed to clear confirm keyboard: %s", repr(e))
+
+    if action == "cancel":
+        await state.clear()
+        await callback.message.answer(
+            "Генерация промокодов отменена.\n"
+            "Если нужно — запусти мастер заново командой /promo_admin.",
+            disable_web_page_preview=True,
+        )
+        await callback.answer("Отменено.")
+        return
+
+    if action != "yes":
+        await callback.answer("Неизвестное действие.", show_alert=True)
+        return
+
+    # action == "yes" — реально генерируем промокоды и пишем в БД
+    data = await state.get_data()
+    mode = data.get("mode")
+    extra_days = data.get("extra_days")
+    valid_days = data.get("valid_days")
+    comment = data.get("comment")
+
+    if extra_days is None or valid_days is None or mode not in ("single", "multi"):
+        await callback.message.answer(
+            "Не удалось собрать параметры промокода. Начни заново с /promo_admin.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        await callback.answer("Ошибка параметров.")
+        return
+
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", None)
 
     try:
         if mode == "single":
             code_count = data.get("code_count")
             if not code_count:
-                await message.answer(
+                await callback.message.answer(
                     "Не найдено количество одноразовых кодов. Начни заново с /promo_admin.",
                     disable_web_page_preview=True,
                 )
                 await state.clear()
+                await callback.answer("Ошибка параметров.")
                 return
 
             params = PromoGenerationParams(
@@ -894,11 +1029,12 @@ async def promo_admin_comment_and_generate(message: Message, state: FSMContext) 
             per_user_limit = data.get("per_user_limit")
 
             if not manual_code or per_user_limit is None:
-                await message.answer(
+                await callback.message.answer(
                     "Не все параметры многоразового промокода заданы. Начни заново с /promo_admin.",
                     disable_web_page_preview=True,
                 )
                 await state.clear()
+                await callback.answer("Ошибка параметров.")
                 return
 
             params = PromoGenerationParams(
@@ -917,40 +1053,72 @@ async def promo_admin_comment_and_generate(message: Message, state: FSMContext) 
                 created_by_admin_id=admin_id,
                 code_length=10,
             )
+            
+        promo_log.info(
+            "[PromoAdmin] Start generate promo codes: mode=%s extra_days=%s valid_days=%s admin_id=%s params=%r",
+            mode,
+            extra_days,
+            valid_days,
+            admin_id,
+            params,
+        )
 
         promo_rows = generate_promo_codes(params)
         sql = build_insert_sql_for_postgres(promo_rows, table_name="promo_codes")
+        promo_log.info(
+            "[PromoAdmin] Generated promo rows: count=%s first_codes=%r",
+            len(promo_rows),
+            [row.get("code") for row in promo_rows[:5]],
+        )
+
+        db.execute_sql(sql)
+        promo_log.info(
+            "[PromoAdmin] Promo codes inserted into DB: count=%s",
+            len(promo_rows),
+        )
+
 
     except Exception as e:
-        log.error("[PromoAdmin] Failed to generate promo codes: %s", repr(e))
-        await message.answer(
+        promo_log.error(
+            "[PromoAdmin] Failed to generate promo codes on confirm: mode=%s extra_days=%s valid_days=%s admin_id=%s error=%r",
+            mode,
+            extra_days,
+            valid_days,
+            admin_id,
+            e,
+        )
+
+        await callback.message.answer(
             "Произошла ошибка при генерации промокодов. Подробности смотри в логах.",
             disable_web_page_preview=True,
         )
         await state.clear()
+        await callback.answer("Ошибка генерации.")
         return
+
 
     await state.clear()
 
     if mode == "single":
-        header = (
-            f"✅ Сгенерировано <b>{len(promo_rows)}</b> одноразовых промокодов.\n"
-            "Ниже — SQL для вставки в таблицу <code>promo_codes</code>:\n\n"
+        codes_preview = "\n".join(row.get("code") for row in promo_rows)
+        text = (
+            f"✅ Сгенерировано и сохранено в базе <b>{len(promo_rows)}</b> одноразовых промокодов.\n\n"
+            "Список кодов:\n"
+            f"<code>{codes_preview}</code>"
         )
     else:
         code_preview = promo_rows[0].get("code")
-        header = (
-            "✅ Сгенерирован многоразовый промокод.\n"
+        text = (
+            "✅ Сгенерирован и сохранён в базе многоразовый промокод.\n"
             f"Код: <code>{code_preview}</code>\n\n"
-            "Ниже — SQL для вставки в таблицу <code>promo_codes</code>:\n\n"
+            "Промокод уже добавлен в таблицу <code>promo_codes</code> и готов к использованию."
         )
 
-    # Отправляем SQL одним сообщением в виде кода
-    await message.answer(
-        header + f"<code>{sql}</code>",
+    await callback.message.answer(
+        text,
         disable_web_page_preview=True,
     )
-
+    await callback.answer("Промокоды созданы.")
 
 
 @router.callback_query(F.data == "demo_request")
@@ -1145,6 +1313,12 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
             disable_web_page_preview=True,
         )
         return
+    
+    promo_log.info(
+        "[PromoApply] Try apply promo: tg_id=%s code=%r",
+        user.id,
+        code_raw,
+    )
 
     result = db.apply_promo_code_to_latest_subscription(
         telegram_user_id=user.id,
@@ -1156,6 +1330,14 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
 
     if not result.get("ok"):
         error = result.get("error")
+        promo_log.warning(
+            "[PromoApply] Failed to apply promo: tg_id=%s code=%r error=%s result=%r",
+            user.id,
+            code_raw,
+            error,
+            result,
+        )
+
         # Подбираем человекочитаемое сообщение
         if error in ("not_found", "expired_or_inactive"):
             text = "Такой промокод не найден или срок его действия истёк."
@@ -1195,6 +1377,14 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
     extra_days = result.get("extra_days")
     new_expires_at = result.get("new_expires_at")
     promo_code = result.get("promo_code")
+    
+    promo_log.info(
+        "[PromoApply] Success apply promo: tg_id=%s code=%r extra_days=%s new_expires_at=%r",
+        user.id,
+        promo_code,
+        extra_days,
+        new_expires_at,
+    )
 
     if isinstance(new_expires_at, datetime):
         expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1375,11 +1565,17 @@ async def cmd_broadcast(message: Message, state: FSMContext) -> None:
 async def cmd_promo_admin(message: Message, state: FSMContext) -> None:
     """
     Запускает мастер генерации промокодов для администратора.
-    В конце бот отдаст SQL INSERT, который можно вставить в БД.
+    В конце мастер покажет сводку параметров и попросит подтверждение,
+    после чего промокоды будут сгенерированы и сразу сохранены в таблицу promo_codes.
     """
     if not is_admin(message):
         await message.answer("Эта команда доступна только администратору.")
         return
+    
+    promo_log.info(
+        "[PromoAdmin] Wizard started by tg_id=%s",
+        message.from_user.id if message.from_user else None,
+    )
 
     await state.clear()
     await state.set_state(PromoAdmin.waiting_for_mode)

@@ -5,6 +5,8 @@ LOG_DIR = "/app/logs"
 VPN_LOG_FILE = os.path.join(LOG_DIR, "vpn_service.log")
 YOOKASSA_LOG_FILE = os.path.join(LOG_DIR, "yookassa.log")
 HELEKET_LOG_FILE = os.path.join(LOG_DIR, "heleket.log")
+PROMO_LOG_FILE = os.path.join(LOG_DIR, "promo.log")
+
 
 os.makedirs(LOG_DIR, exist_ok=True)
 
@@ -33,7 +35,6 @@ if not yookassa_logger.handlers:
     yk_fh.setFormatter(formatter)
     yookassa_logger.addHandler(yk_fh)
 
-
 # ===== логгер Heleket =====
 heleket_logger = logging.getLogger("heleket")
 heleket_logger.setLevel(logging.INFO)
@@ -43,6 +44,18 @@ if not heleket_logger.handlers:
     hk_fh.setLevel(logging.INFO)
     hk_fh.setFormatter(formatter)
     heleket_logger.addHandler(hk_fh)
+
+
+# ===== логгер промокодов =====
+promo_logger = logging.getLogger("promo")
+promo_logger.setLevel(logging.INFO)
+
+if not promo_logger.handlers:
+    promo_fh = logging.FileHandler(PROMO_LOG_FILE, encoding="utf-8")
+    promo_fh.setLevel(logging.INFO)
+    promo_fh.setFormatter(formatter)
+    promo_logger.addHandler(promo_fh)
+
 
 
 def get_logger():
@@ -55,3 +68,8 @@ def get_yookassa_logger():
 
 def get_heleket_logger():
     return heleket_logger
+
+
+def get_promo_logger():
+    return promo_logger
+

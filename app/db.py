@@ -532,6 +532,18 @@ def get_subscription_by_event(event_name: str) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
             return dict(row)
+        
+        
+def execute_sql(sql: str) -> None:
+    """
+    Выполняет произвольный SQL-запрос без возврата результата.
+    Используется, например, для вставки сгенерированных промокодов.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+
 
 def apply_promo_code_to_latest_subscription(
     telegram_user_id: int,
