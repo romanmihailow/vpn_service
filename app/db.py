@@ -125,7 +125,7 @@ def insert_subscription(
     wg_public_key: str,
     expires_at: datetime,
     event_name: str,
-) -> None:
+) -> int:
     sql = """
     INSERT INTO vpn_subscriptions (
         tribute_user_id,
@@ -144,7 +144,8 @@ def insert_subscription(
         last_event_name
     ) VALUES (
         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s
-    );
+    )
+    RETURNING id;
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -166,7 +167,15 @@ def insert_subscription(
                     event_name,
                 ),
             )
+            row = cur.fetchone()
         conn.commit()
+
+    if not row:
+        raise RuntimeError("Failed to insert subscription and get id")
+
+    # row[0] — это значение SERIAL PRIMARY KEY id
+    return row[0]
+
 
 
 
@@ -542,6 +551,25 @@ def execute_sql(sql: str) -> None:
         with conn.cursor() as cur:
             cur.execute(sql)
         conn.commit()
+        
+def link_promo_usage_to_subscription(
+    usage_id: int,
+    subscription_id: int,
+) -> None:
+    """
+    Привязывает запись об использовании промокода к конкретной подписке.
+    Используется для сценария: промокод выдаёт НОВУЮ подписку.
+    """
+    sql = """
+    UPDATE promo_code_usages
+    SET subscription_id = %s
+    WHERE id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (subscription_id, usage_id))
+        conn.commit()
+
 
 
 def apply_promo_code_to_latest_subscription(
@@ -731,6 +759,7 @@ def apply_promo_code_without_subscription(
     - Эта функция не создаёт запись в vpn_subscriptions.
       Она только проверяет и "списывает" промокод, возвращая extra_days и new_expires_at.
     - Создание самой подписки (WireGuard-ключи, IP, insert_subscription) делает код бота.
+    - Для последующей привязки usage -> subscription возвращает usage_id.
     """
     result: Dict[str, Any] = {
         "ok": False,
@@ -811,13 +840,20 @@ def apply_promo_code_without_subscription(
 
                 # 4) Пишем факт использования промокода
                 #    subscription_id здесь ещё нет — подписку создаст бот.
-                #    Если в схеме колонка NOT NULL, безопаснее записать 0.
+                #    Сохраняем usage без subscription_id, но сразу получаем его id.
                 sql_insert_usage = """
                 INSERT INTO promo_code_usages (promo_code_id, telegram_user_id, subscription_id)
-                VALUES (%s, %s, 0);
+                VALUES (%s, %s, NULL)
+                RETURNING id;
                 """
                 cur.execute(sql_insert_usage, (promo_id, telegram_user_id))
+                usage_row = cur.fetchone()
+                if not usage_row or "id" not in usage_row:
+                    result["error"] = "db_error"
+                    result["error_message"] = "Не удалось записать использование промокода."
+                    return result
 
+                usage_id = usage_row["id"]
 
                 # 5) Обновляем used_count и is_active
                 sql_update_promo = """
@@ -845,6 +881,7 @@ def apply_promo_code_without_subscription(
                 result["promo_code"] = promo_row["code"]
                 result["extra_days"] = extra_days
                 result["new_expires_at"] = new_expires_at
+                result["usage_id"] = usage_id
                 return result
 
         except Exception as e:

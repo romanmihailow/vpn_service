@@ -1364,13 +1364,15 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
             extra_days = promo_new_result.get("extra_days")
             new_expires_at = promo_new_result.get("new_expires_at")
             promo_code = promo_new_result.get("promo_code")
+            usage_id = promo_new_result.get("usage_id")
 
             promo_log.info(
-                "[PromoApply] Promo used for new subscription: tg_id=%s code=%r extra_days=%s new_expires_at=%r",
+                "[PromoApply] Promo used for new subscription: tg_id=%s code=%r extra_days=%s new_expires_at=%r usage_id=%r",
                 user.id,
                 promo_code,
                 extra_days,
                 new_expires_at,
+                usage_id,
             )
 
             # Пытаемся создать новую подписку и выдать конфиг
@@ -1402,7 +1404,8 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                 else:
                     expires_at = datetime.utcnow() + timedelta(days=extra_days or 0)
 
-                db.insert_subscription(
+                # создаём подписку и получаем её ID
+                new_sub_id = db.insert_subscription(
                     tribute_user_id=0,
                     telegram_user_id=user.id,
                     telegram_user_name=user.username,
@@ -1417,6 +1420,23 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                     expires_at=expires_at,
                     event_name="promo_new_subscription",
                 )
+
+                # если знаем usage_id — линкуем usage к созданной подписке
+                if usage_id is not None:
+                    try:
+                        db.link_promo_usage_to_subscription(
+                            usage_id=usage_id,
+                            subscription_id=new_sub_id,
+                        )
+                    except Exception as e:
+                        log.error(
+                            "[PromoApply] Failed to link promo usage %s to subscription %s for tg_id=%s: %r",
+                            usage_id,
+                            new_sub_id,
+                            user.id,
+                            e,
+                        )
+
 
                 config_text = wg.build_client_config(
                     client_private_key=client_priv,
