@@ -24,8 +24,8 @@ YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY")
 
 log = get_yookassa_logger()
 
-# Сколько дней даёт каждый тариф ЮKassa
-TARIFF_DAYS = {
+# Сколько дней даёт каждый тариф ЮKassa (fallback, если БД недоступна)
+TARIFF_DAYS_FALLBACK = {
     "1m": 30,
     "3m": 90,
     "6m": 180,
@@ -34,14 +34,75 @@ TARIFF_DAYS = {
     "forever": 3650,
 }
 
-# Ожидаемые суммы по тарифам (можешь подправить под свои цены)
-TARIFF_AMOUNTS = {
+# Ожидаемые суммы по тарифам (fallback, если БД недоступна)
+TARIFF_AMOUNTS_FALLBACK = {
     "1m": "100.00",
     "3m": "270.00",
     "6m": "480.00",
     "1y": "840.00",
     "forever": "1990.00",
 }
+
+
+def get_tariff_days_and_amount_from_db(tariff_code: str) -> tuple[int | None, str | None]:
+    """
+    Возвращает (duration_days, yookassa_amount) для тарифа из БД.
+    При ошибке/отсутствии тарифа — использует fallback-словарь.
+    """
+    try:
+        rows = db.get_tariffs_for_yookassa()
+    except Exception as e:
+        log.error(
+            "[YooKassaWebhook] Failed to load tariffs from DB, using fallback for code=%s: %r",
+            tariff_code,
+            e,
+        )
+        return (
+            TARIFF_DAYS_FALLBACK.get(tariff_code),
+            TARIFF_AMOUNTS_FALLBACK.get(tariff_code),
+        )
+
+    for row in rows:
+        if row.get("code") != tariff_code:
+            continue
+
+        duration_days = row.get("duration_days")
+        amount = row.get("yookassa_amount")
+
+        if duration_days is None:
+            days_value: int | None = None
+        else:
+            try:
+                days_value = int(duration_days)
+            except Exception:
+                log.error(
+                    "[YooKassaWebhook] Bad duration_days=%r for code=%s, using fallback days",
+                    duration_days,
+                    tariff_code,
+                )
+                days_value = None
+
+        if amount is None:
+            amount_str: str | None = None
+        else:
+            try:
+                amount_str = format(amount, ".2f")
+            except Exception:
+                amount_str = str(amount)
+
+        if days_value is None:
+            days_value = TARIFF_DAYS_FALLBACK.get(tariff_code)
+        if amount_str is None:
+            amount_str = TARIFF_AMOUNTS_FALLBACK.get(tariff_code)
+
+        return days_value, amount_str
+
+    # если тариф с таким кодом не нашли в БД
+    return (
+        TARIFF_DAYS_FALLBACK.get(tariff_code),
+        TARIFF_AMOUNTS_FALLBACK.get(tariff_code),
+    )
+
 
 
 
@@ -483,17 +544,21 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                     )
 
                     # Определяем, сколько дней дал этот платёж
-                    # 1) пытаемся взять по tariff_code из оригинального платежа
                     days_for_tariff = None
-                    if tariff_code_from_payment in TARIFF_DAYS:
-                        days_for_tariff = TARIFF_DAYS[tariff_code_from_payment]
-                    else:
-                        # 2) пробуем вытащить из sub["period"], если там формат "yookassa_1m"
+
+                    # 1) пытаемся взять по tariff_code из оригинального платежа
+                    if tariff_code_from_payment:
+                        days_for_tariff, _ = get_tariff_days_and_amount_from_db(tariff_code_from_payment)
+
+                    # 2) если tariff_code не дали или не нашли в БД — пробуем вытащить из sub["period"],
+                    #    если там формат "yookassa_1m"
+                    if days_for_tariff is None:
                         period = str(sub.get("period") or "")
                         if period.startswith("yookassa_"):
                             suffix = period[len("yookassa_") :]
-                            if suffix in TARIFF_DAYS:
-                                days_for_tariff = TARIFF_DAYS[suffix]
+                            if suffix:
+                                days_for_tariff, _ = get_tariff_days_and_amount_from_db(suffix)
+
 
                     if days_for_tariff is None:
                         log.error(
@@ -641,18 +706,18 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (bad user id)")
 
-    days = TARIFF_DAYS.get(tariff_code)
+    days, expected_amount = get_tariff_days_and_amount_from_db(tariff_code)
     if not days:
         log.error("[YooKassaWebhook] Unknown tariff_code=%r", tariff_code)
         return web.Response(text="ok (unknown tariff)")
 
-    expected_amount = TARIFF_AMOUNTS.get(tariff_code)
     if not expected_amount:
         log.error(
             "[YooKassaWebhook] No expected amount configured for tariff_code=%r",
             tariff_code,
         )
         return web.Response(text="ok (no amount for tariff)")
+
 
     # 🔍 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА ЧЕРЕЗ API ЮKassa
     api_payment = fetch_payment_from_yookassa(payment_id)

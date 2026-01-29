@@ -26,13 +26,51 @@ log = get_heleket_logger()
 HELEKET_API_PAYMENT_KEY = os.getenv("HELEKET_API_PAYMENT_KEY")
 
 # используем те же длительности, что и для YooKassa
-TARIFF_DAYS = {
+# это fallback, если не получится прочитать из БД
+TARIFF_DAYS_FALLBACK = {
     "1m": 30,
     "3m": 90,
     "6m": 180,
     "1y": 365,
     "forever": 3650,
 }
+
+
+def get_tariff_days_heleket(tariff_code: str) -> int | None:
+    """
+    Возвращает duration_days для тарифа Heleket из БД.
+    При ошибке/отсутствии — отдаёт значение из TARIFF_DAYS_FALLBACK.
+    """
+    try:
+        rows = db.get_tariffs_for_heleket()
+    except Exception as e:
+        log.error(
+            "[HeleketWebhook] Failed to load tariffs from DB, using fallback days for code=%s: %r",
+            tariff_code,
+            e,
+        )
+        return TARIFF_DAYS_FALLBACK.get(tariff_code)
+
+    for row in rows:
+        if row.get("code") != tariff_code:
+            continue
+
+        duration_days = row.get("duration_days")
+        if duration_days is None:
+            break
+
+        try:
+            return int(duration_days)
+        except Exception:
+            log.error(
+                "[HeleketWebhook] Bad duration_days=%r for code=%s, using fallback",
+                duration_days,
+                tariff_code,
+            )
+            break
+
+    return TARIFF_DAYS_FALLBACK.get(tariff_code)
+
 
 
 def parse_heleket_datetime(dt_str: str) -> datetime | None:
@@ -339,10 +377,11 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (no user or tariff)")
 
-    days = TARIFF_DAYS.get(tariff_code)
+    days = get_tariff_days_heleket(tariff_code)
     if not days:
         log.error("[HeleketWebhook] unknown tariff_code=%r", tariff_code)
         return web.Response(text="ok (unknown tariff)")
+
 
     # идемпотентность по uuid
     event_name = f"heleket_payment_paid_{uuid}"
