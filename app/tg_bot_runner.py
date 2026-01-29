@@ -500,15 +500,16 @@ async def cmd_promo(message: Message) -> None:
 async def cmd_promo_code(message: Message, state: FSMContext) -> None:
     """
     Запускает диалог ввода промокода.
-    Промокод добавляет дополнительные дни к текущей активной подписке.
+    Промокод добавляет дополнительные дни к подписке или выдаёт новую.
     """
     await state.set_state(PromoStates.waiting_for_code)
     await message.answer(
         "Отправь промокод одним сообщением.\n\n"
         "Промокод добавит дополнительные дни к твоей активной подписке, "
-        "если она сейчас есть.",
+        "а если подписки ещё нет — выдаст новую на срок промокода.",
         disable_web_page_preview=True,
     )
+
 
 
 @router.message(Command("buy"))
@@ -557,7 +558,7 @@ async def promo_open_callback(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.message.answer(
         "Отправь промокод одним сообщением.\n\n"
         "Промокод добавит дополнительные дни к твоей активной подписке, "
-        "если она сейчас есть.",
+        "а если подписки ещё нет — выдаст новую на срок промокода.",
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -1342,12 +1343,125 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         if error in ("not_found", "expired_or_inactive"):
             text = "Такой промокод не найден или срок его действия истёк."
         elif error == "no_active_subscription":
-            text = (
-                "У тебя сейчас нет активной подписки, к которой можно применить промокод.\n\n"
-                "Сначала оформи подписку, а затем повторно введи промокод."
+            # Попробуем использовать промокод как выдачу новой подписки
+            promo_new_result = db.apply_promo_code_without_subscription(
+                telegram_user_id=user.id,
+                code=code_raw,
             )
+
+            if not promo_new_result.get("ok"):
+                # Если даже для новой подписки промокод не подошёл — ведём себя по-старому
+                text = (
+                    "У тебя сейчас нет активной подписки, к которой можно применить промокод.\n\n"
+                    "Сначала оформи подписку, а затем повторно введи промокод."
+                )
+                await message.answer(
+                    text,
+                    disable_web_page_preview=True,
+                )
+                return
+
+            extra_days = promo_new_result.get("extra_days")
+            new_expires_at = promo_new_result.get("new_expires_at")
+            promo_code = promo_new_result.get("promo_code")
+
+            promo_log.info(
+                "[PromoApply] Promo used for new subscription: tg_id=%s code=%r extra_days=%s new_expires_at=%r",
+                user.id,
+                promo_code,
+                extra_days,
+                new_expires_at,
+            )
+
+            # Пытаемся создать новую подписку и выдать конфиг
+            try:
+                # На всякий случай выключим все активные подписки (если вдруг что-то есть)
+                deactivate_existing_active_subscriptions(
+                    telegram_user_id=user.id,
+                    reason="auto_replace_promo_new_sub",
+                )
+
+                client_priv, client_pub = wg.generate_keypair()
+                client_ip = wg.generate_client_ip()
+                allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+                log.info(
+                    "[PromoApply] Add peer (new sub) pubkey=%s ip=%s for tg_id=%s",
+                    client_pub,
+                    allowed_ip,
+                    user.id,
+                )
+                wg.add_peer(
+                    public_key=client_pub,
+                    allowed_ip=allowed_ip,
+                    telegram_user_id=user.id,
+                )
+
+                if isinstance(new_expires_at, datetime):
+                    expires_at = new_expires_at
+                else:
+                    expires_at = datetime.utcnow() + timedelta(days=extra_days or 0)
+
+                db.insert_subscription(
+                    tribute_user_id=0,
+                    telegram_user_id=user.id,
+                    telegram_user_name=user.username,
+                    subscription_id=0,
+                    period_id=0,
+                    period="promo_code",
+                    channel_id=0,
+                    channel_name="Promo code",
+                    vpn_ip=client_ip,
+                    wg_private_key=client_priv,
+                    wg_public_key=client_pub,
+                    expires_at=expires_at,
+                    event_name="promo_new_subscription",
+                )
+
+                config_text = wg.build_client_config(
+                    client_private_key=client_priv,
+                    client_ip=client_ip,
+                )
+
+                await send_vpn_config_to_user(
+                    telegram_user_id=user.id,
+                    config_text=config_text,
+                    caption=(
+                        "По промокоду тебе выдан доступ к MaxNet VPN.\n\n"
+                        "Ниже — конфиг WireGuard и QR для подключения."
+                    ),
+                )
+
+            except Exception as e:
+                log.error(
+                    "[PromoApply] Failed to create new subscription from promo for tg_id=%s: %r",
+                    user.id,
+                    e,
+                )
+                await message.answer(
+                    "При попытке выдать подписку по промокоду произошла ошибка.\n"
+                    "Попробуй ещё раз позже или напиши в поддержку.",
+                    disable_web_page_preview=True,
+                )
+                return
+
+            if isinstance(expires_at, datetime):
+                expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            else:
+                expires_str = str(expires_at)
+
+            await message.answer(
+                "✅ Промокод успешно применён.\n\n"
+                f"Тебе выдана новая VPN-подписка на <b>{extra_days} дн.</b>\n"
+                f"Срок действия до: <b>{expires_str}</b>\n\n"
+                f"Промокод: <code>{promo_code}</code>",
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+            )
+            return
         elif error == "user_not_allowed":
             text = "Этот промокод привязан к другому пользователю и не может быть применён."
+
         elif error == "no_uses_left":
             text = "Лимит использований этого промокода уже исчерпан."
         elif error == "per_user_limit_reached":
