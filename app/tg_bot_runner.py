@@ -98,6 +98,12 @@ class Broadcast(StatesGroup):
     waiting_for_text = State()
 
 
+class PromoStates(StatesGroup):
+    waiting_for_code = State()
+
+
+
+
 # Справочник тарифов для оплаты через ЮKassa.
 # Цены указаны в РУБЛЯХ.
 TARIFFS = {
@@ -252,12 +258,19 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
+                text="🎟 Ввести промокод",
+                callback_data="promo:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="🌐 Открыть сайт",
                 url="https://maxnetvpn.ru",
             ),
         ],
     ]
 )
+
 
 
 START_TEXT = (
@@ -473,6 +486,21 @@ async def cmd_promo(message: Message) -> None:
     )
 
 
+@router.message(Command("promo_code"))
+async def cmd_promo_code(message: Message, state: FSMContext) -> None:
+    """
+    Запускает диалог ввода промокода.
+    Промокод добавляет дополнительные дни к текущей активной подписке.
+    """
+    await state.set_state(PromoStates.waiting_for_code)
+    await message.answer(
+        "Отправь промокод одним сообщением.\n\n"
+        "Промокод добавит дополнительные дни к твоей активной подписке, "
+        "если она сейчас есть.",
+        disable_web_page_preview=True,
+    )
+
+
 @router.message(Command("buy"))
 async def cmd_buy(message: Message) -> None:
     await message.answer(
@@ -480,6 +508,7 @@ async def cmd_buy(message: Message) -> None:
         reply_markup=TARIFF_KEYBOARD,
         disable_web_page_preview=True,
     )
+
 
 @router.message(Command("buy_crypto"))
 async def cmd_buy_crypto(message: Message) -> None:
@@ -503,6 +532,22 @@ async def heleket_open_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Выбери тариф для оплаты криптовалютой (Heleket):",
         reply_markup=HELEKET_TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+    
+    
+@router.callback_query(F.data == "promo:open")
+async def promo_open_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """
+    Открывает диалог ввода промокода по кнопке из главного меню.
+    Использует то же состояние, что и команда /promo_code.
+    """
+    await state.set_state(PromoStates.waiting_for_code)
+    await callback.message.answer(
+        "Отправь промокод одним сообщением.\n\n"
+        "Промокод добавит дополнительные дни к твоей активной подписке, "
+        "если она сейчас есть.",
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -690,7 +735,95 @@ async def cmd_status(message: Message) -> None:
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
-    
+
+
+@router.message(PromoStates.waiting_for_code)
+async def promo_code_apply(message: Message, state: FSMContext) -> None:
+    """
+    Обработка введённого промокода.
+    """
+    user = message.from_user
+    if user is None:
+        await message.answer(
+            "Не удалось определить твой Telegram ID. Попробуй ещё раз.",
+            disable_web_page_preview=True,
+        )
+        await state.clear()
+        return
+
+    code_raw = (message.text or "").strip()
+    if not code_raw:
+        await message.answer(
+            "Промокод не должен быть пустым. Отправь, пожалуйста, код ещё раз.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    result = db.apply_promo_code_to_latest_subscription(
+        telegram_user_id=user.id,
+        code=code_raw,
+    )
+
+    # Завершаем FSM в любом случае
+    await state.clear()
+
+    if not result.get("ok"):
+        error = result.get("error")
+        # Подбираем человекочитаемое сообщение
+        if error in ("not_found", "expired_or_inactive"):
+            text = "Такой промокод не найден или срок его действия истёк."
+        elif error == "no_active_subscription":
+            text = (
+                "У тебя сейчас нет активной подписки, к которой можно применить промокод.\n\n"
+                "Сначала оформи подписку, а затем повторно введи промокод."
+            )
+        elif error == "user_not_allowed":
+            text = "Этот промокод привязан к другому пользователю и не может быть применён."
+        elif error == "no_uses_left":
+            text = "Лимит использований этого промокода уже исчерпан."
+        elif error == "per_user_limit_reached":
+            text = "Ты уже использовал этот промокод максимально возможное количество раз."
+        elif error == "invalid_extra_days":
+            text = "Этот промокод сейчас не даёт дополнительных дней."
+        elif error == "empty_code":
+            text = "Промокод не должен быть пустым."
+        elif error == "db_error":
+            # Можно показать более общий текст без подробностей
+            text = (
+                "При обработке промокода произошла ошибка.\n"
+                "Попробуй ещё раз чуть позже или напиши в поддержку."
+            )
+        else:
+            # fallback — либо используем error_message, либо общий текст
+            text = result.get("error_message") or (
+                "Не удалось применить промокод. Попробуй ещё раз или напиши в поддержку."
+            )
+
+        await message.answer(
+            text,
+            disable_web_page_preview=True,
+        )
+        return
+
+    extra_days = result.get("extra_days")
+    new_expires_at = result.get("new_expires_at")
+    promo_code = result.get("promo_code")
+
+    if isinstance(new_expires_at, datetime):
+        expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+    else:
+        expires_str = str(new_expires_at)
+
+    await message.answer(
+        "✅ Промокод успешно применён.\n\n"
+        f"К твоей активной подписке добавлено <b>{extra_days} дн.</b>\n"
+        f"Новый срок действия: <b>{expires_str}</b>\n\n"
+        f"Промокод: <code>{promo_code}</code>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 @router.message(DemoRequest.waiting_for_message)
 async def demo_request_get_message(message: Message, state: FSMContext) -> None:
     user = message.from_user
@@ -2127,6 +2260,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="status", description="Статус VPN-подписки"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="promo", description="Выгодные варианты подписки"),
+        BotCommand(command="promo_code", description="Применить промокод"),
         BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
         BotCommand(command="buy_crypto", description="Оплатить подписку криптой (Heleket)"),
         BotCommand(command="demo", description="Запросить демо-доступ"),
@@ -2135,6 +2269,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 async def auto_deactivate_expired_subscriptions() -> None:

@@ -532,3 +532,179 @@ def get_subscription_by_event(event_name: str) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
             return dict(row)
+
+def apply_promo_code_to_latest_subscription(
+    telegram_user_id: int,
+    code: str,
+) -> Dict[str, Any]:
+    """
+    Пытается применить промокод к последней активной подписке пользователя.
+
+    Возвращает dict вида:
+        {
+            "ok": True,
+            "promo_code": "MAXNET7DAYS",
+            "extra_days": 7,
+            "new_expires_at": <datetime>,
+        }
+
+    либо:
+        {
+            "ok": False,
+            "error": "not_found" | "expired_or_inactive" | "no_active_subscription"
+                     | "user_not_allowed" | "no_uses_left" | "per_user_limit_reached"
+                     | "db_error",
+            "error_message": "Человекочитаемое описание",
+        }
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": "unknown",
+        "error_message": "Неизвестная ошибка.",
+    }
+
+    normalized_code = (code or "").strip().upper()
+    if not normalized_code:
+        result["error"] = "empty_code"
+        result["error_message"] = "Промокод не должен быть пустым."
+        return result
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1) Ищем активный промокод (сразу с блокировкой строки)
+                sql_select_promo = """
+                SELECT *
+                FROM promo_codes
+                WHERE code = %s
+                  AND is_active = TRUE
+                  AND (valid_from IS NULL OR valid_from <= NOW())
+                  AND (valid_until IS NULL OR valid_until >= NOW())
+                FOR UPDATE;
+                """
+                cur.execute(sql_select_promo, (normalized_code,))
+                promo_row = cur.fetchone()
+
+                if promo_row is None:
+                    result["error"] = "not_found"
+                    result["error_message"] = "Промокод не найден или его срок действия истёк."
+                    return result
+
+                promo_id = promo_row["id"]
+                max_uses = promo_row.get("max_uses")
+                used_count = promo_row.get("used_count") or 0
+                per_user_limit = promo_row.get("per_user_limit") or 1
+                extra_days = promo_row.get("extra_days") or 0
+                allowed_telegram_id = promo_row.get("allowed_telegram_id")
+
+                # Проверка, что промо вообще что-то добавляет
+                if extra_days <= 0:
+                    result["error"] = "invalid_extra_days"
+                    result["error_message"] = "Этот промокод не даёт дополнительных дней."
+                    return result
+
+                # Проверка на конкретного пользователя (если промо ограничено по TG ID)
+                if allowed_telegram_id is not None and int(allowed_telegram_id) != int(telegram_user_id):
+                    result["error"] = "user_not_allowed"
+                    result["error_message"] = "Этот промокод предназначен для другого пользователя."
+                    return result
+
+                # Проверка глобального лимита использований
+                if max_uses is not None and used_count >= max_uses:
+                    result["error"] = "no_uses_left"
+                    result["error_message"] = "Лимит использований этого промокода уже исчерпан."
+                    return result
+
+                # 2) Считаем, сколько раз КОНКРЕТНЫЙ пользователь уже использовал этот промокод
+                sql_user_usage = """
+                SELECT COUNT(*) AS cnt
+                FROM promo_code_usages
+                WHERE promo_code_id = %s
+                  AND telegram_user_id = %s;
+                """
+                cur.execute(sql_user_usage, (promo_id, telegram_user_id))
+                row_usage = cur.fetchone()
+                user_usage_count = row_usage["cnt"] if row_usage is not None else 0
+
+                if user_usage_count >= per_user_limit:
+                    result["error"] = "per_user_limit_reached"
+                    result["error_message"] = "Ты уже использовал этот промокод максимально возможное количество раз."
+                    return result
+
+                # 3) Ищем последнюю активную подписку пользователя
+                sql_select_sub = """
+                SELECT *
+                FROM vpn_subscriptions
+                WHERE telegram_user_id = %s
+                  AND active = TRUE
+                  AND expires_at > NOW()
+                ORDER BY expires_at DESC, id DESC
+                LIMIT 1;
+                """
+                cur.execute(sql_select_sub, (telegram_user_id,))
+                sub_row = cur.fetchone()
+                if sub_row is None:
+                    result["error"] = "no_active_subscription"
+                    result["error_message"] = "У тебя нет активной подписки, к которой можно применить промокод."
+                    return result
+
+                sub_id = sub_row["id"]
+
+                # 4) Продлеваем подписку на extra_days: GREATEST(expires_at, NOW()) + interval
+                sql_update_sub = """
+                UPDATE vpn_subscriptions
+                SET expires_at = GREATEST(expires_at, NOW()) + (%s || ' days')::interval
+                WHERE id = %s
+                RETURNING expires_at;
+                """
+                cur.execute(sql_update_sub, (extra_days, sub_id))
+                updated_sub = cur.fetchone()
+                if updated_sub is None:
+                    result["error"] = "db_error"
+                    result["error_message"] = "Не удалось обновить срок действия подписки."
+                    return result
+
+                new_expires_at = updated_sub["expires_at"]
+
+                # 5) Записываем факт использования промокода
+                sql_insert_usage = """
+                INSERT INTO promo_code_usages (promo_code_id, telegram_user_id, subscription_id)
+                VALUES (%s, %s, %s);
+                """
+                cur.execute(sql_insert_usage, (promo_id, telegram_user_id, sub_id))
+
+                # 6) Увеличиваем used_count и, при необходимости, отключаем промокод
+                sql_update_promo = """
+                UPDATE promo_codes
+                SET used_count = used_count + 1,
+                    is_active = CASE
+                        WHEN max_uses IS NOT NULL AND used_count + 1 >= max_uses THEN FALSE
+                        ELSE is_active
+                    END
+                WHERE id = %s
+                RETURNING used_count, max_uses, is_active;
+                """
+                cur.execute(sql_update_promo, (promo_id,))
+                updated_promo = cur.fetchone()
+                if updated_promo is None:
+                    result["error"] = "db_error"
+                    result["error_message"] = "Не удалось обновить статистику по промокоду."
+                    return result
+
+                # Всё прошло успешно — фиксируем транзакцию
+                conn.commit()
+
+                result["ok"] = True
+                result["error"] = None
+                result["error_message"] = None
+                result["promo_code"] = promo_row["code"]
+                result["extra_days"] = extra_days
+                result["new_expires_at"] = new_expires_at
+                return result
+
+        except Exception as e:
+            # В случае исключения просто откатываем транзакцию
+            conn.rollback()
+            result["error"] = "db_error"
+            result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
+            return result
