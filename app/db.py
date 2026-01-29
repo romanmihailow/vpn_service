@@ -55,12 +55,51 @@ def init_db() -> None:
 
     CREATE INDEX IF NOT EXISTS idx_vpn_subscriptions_user_period
         ON vpn_subscriptions (tribute_user_id, period_id, channel_id);
+
+    --------------------------------------------------------------------
+    -- Таблица тарифов
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS tariffs (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(32) NOT NULL UNIQUE,         -- "1m", "3m", "6m", "1y", "forever"
+        title TEXT NOT NULL,                      -- надпись на кнопке / человекочитаемое имя
+        duration_days INTEGER NOT NULL,           -- срок подписки в днях
+
+        -- Цена для ЮKassa (рубли)
+        yookassa_amount NUMERIC(10, 2),
+
+        -- Цена для Heleket (USDT / доллары)
+        heleket_amount NUMERIC(10, 2),
+
+        -- Опционально: цена в баллах (на будущее)
+        points_cost INTEGER,
+
+        -- Можно временно выключать тариф
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+
+        -- Порядок сортировки кнопок
+        sort_order INTEGER NOT NULL DEFAULT 100,
+
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tariffs_code
+        ON tariffs (code);
+
+    CREATE INDEX IF NOT EXISTS idx_tariffs_active
+        ON tariffs (is_active);
+
+    CREATE INDEX IF NOT EXISTS idx_tariffs_sort
+        ON tariffs (sort_order);
     """
+
 
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(create_table_sql)
         conn.commit()
+
 
 
 def get_active_subscription(
@@ -413,6 +452,32 @@ def get_last_subscriptions(limit: int = 50):
             cur.execute(sql, (limit,))
             return cur.fetchall()
 
+
+def get_active_tariffs() -> List[Dict[str, Any]]:
+    """
+    Возвращает список активных тарифов из таблицы tariffs.
+    Используется для формирования текста /subscription.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        sort_order,
+        yookassa_amount,
+        heleket_amount,
+        points_cost
+    FROM tariffs
+    WHERE is_active = TRUE
+    ORDER BY sort_order ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return rows
+
+
 def get_all_telegram_users() -> List[Dict[str, Any]]:
     """
     Возвращает список уникальных Telegram-пользователей,
@@ -431,6 +496,7 @@ def get_all_telegram_users() -> List[Dict[str, Any]]:
             cur.execute(sql)
             rows = cur.fetchall()
             return rows
+
 
 
 def get_latest_subscription_for_telegram(
@@ -889,3 +955,100 @@ def apply_promo_code_without_subscription(
             result["error"] = "db_error"
             result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
             return result
+
+def get_tariffs_for_yookassa() -> List[Dict[str, Any]]:
+    """
+    Возвращает список активных тарифов, у которых задана цена для ЮKassa.
+    Используется для построения кнопок оплаты картой и получения сумм.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        yookassa_amount,
+        sort_order
+    FROM tariffs
+    WHERE is_active = TRUE
+      AND yookassa_amount IS NOT NULL
+    ORDER BY sort_order ASC, id ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return rows
+
+
+def get_tariffs_for_heleket() -> List[Dict[str, Any]]:
+    """
+    Возвращает список активных тарифов, у которых задана цена для Heleket.
+    Используется для построения кнопок оплаты криптой и получения сумм.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        heleket_amount,
+        sort_order
+    FROM tariffs
+    WHERE is_active = TRUE
+      AND heleket_amount IS NOT NULL
+    ORDER BY sort_order ASC, id ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return rows
+
+
+def get_yookassa_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает один тариф по code для оплаты ЮKassa.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        yookassa_amount
+    FROM tariffs
+    WHERE code = %s
+      AND is_active = TRUE
+      AND yookassa_amount IS NOT NULL
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (code,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row
+
+
+def get_heleket_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает один тариф по code для оплаты в Heleket.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        heleket_amount
+    FROM tariffs
+    WHERE code = %s
+      AND is_active = TRUE
+      AND heleket_amount IS NOT NULL
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (code,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row

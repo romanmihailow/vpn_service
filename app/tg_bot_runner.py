@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, List
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
 from aiogram.types import (
@@ -112,125 +113,246 @@ class PromoAdmin(StatesGroup):
     waiting_for_confirm = State()
 
 
-# Справочник тарифов для оплаты через ЮKassa.
-# Цены указаны в РУБЛЯХ.
-TARIFFS = {
-    "1m": {
-        "amount": "100.00",
-        "label": "1 месяц — 100 ₽",
-    },
-    "3m": {
-        "amount": "270.00",
-        "label": "3 месяца — 270 ₽",
-    },
-    "6m": {
-        "amount": "480.00",
-        "label": "6 месяцев — 480 ₽",
-    },
-    "1y": {
-        "amount": "840.00",
-        "label": "1 год — 840 ₽",
-    },
-    "forever": {
-        "amount": "1990.00",
-        "label": "Навсегда — 1990 ₽",
-    },
-}
+# Справочники тарифов для оплаты.
+# Теперь основным источником является таблица tariffs в PostgreSQL.
+# При ошибке загрузки из БД используется fallback на значения по умолчанию
+# (как было захардкожено раньше), чтобы бот не упал.
 
-# Справочник тарифов для оплаты через Heleket.
-# Цены указаны в ДОЛЛАРАХ (USDT по факту).
-HELEKET_TARIFFS = {
-    "1m": {
-        "amount": "1.00",
-        "label": "1 месяц — 1 $",
-    },
-    "3m": {
-        "amount": "3.00",
-        "label": "3 месяца — 3 $",
-    },
-    "6m": {
-        "amount": "6.00",
-        "label": "6 месяцев — 6 $",
-    },
-    "1y": {
-        "amount": "12.00",
-        "label": "1 год — 12 $",
-    },
-    "forever": {
-        "amount": "25.00",
-        "label": "Навсегда — 25 $",
-    },
-}
+def load_yookassa_tariffs_from_db() -> Dict[str, Dict[str, str]]:
+    """
+    Загружает тарифы для ЮKassa из БД и возвращает dict вида:
+    {
+        "1m": {"amount": "100.00", "label": "1 месяц — 100 ₽"},
+        ...
+    }
+    """
+    tariffs: Dict[str, Dict[str, str]] = {}
 
-TARIFF_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="1 месяц — 100 ₽",
-                callback_data="pay:tariff:1m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="3 месяца — 270 ₽",
-                callback_data="pay:tariff:3m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="6 месяцев — 480 ₽",
-                callback_data="pay:tariff:6m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="1 год — 840 ₽",
-                callback_data="pay:tariff:1y",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="Навсегда — 1990 ₽",
-                callback_data="pay:tariff:forever",
-            ),
-        ],
-    ]
+    try:
+        rows = db.get_tariffs_for_yookassa()
+    except Exception as e:
+        log.error(
+            "[Tariffs] Failed to load Yookassa tariffs from DB, will use defaults: %r",
+            e,
+        )
+        return {
+            "1m": {
+                "amount": "100.00",
+                "label": "1 месяц — 100 ₽",
+            },
+            "3m": {
+                "amount": "270.00",
+                "label": "3 месяца — 270 ₽",
+            },
+            "6m": {
+                "amount": "480.00",
+                "label": "6 месяцев — 480 ₽",
+            },
+            "1y": {
+                "amount": "840.00",
+                "label": "1 год — 840 ₽",
+            },
+            "forever": {
+                "amount": "1990.00",
+                "label": "Навсегда — 1990 ₽",
+            },
+        }
+
+    for row in rows:
+        code = row.get("code")
+        title = row.get("title")
+        amount = row.get("yookassa_amount")
+
+        if not code or title is None or amount is None:
+            continue
+
+        # amount из БД (NUMERIC) приводим к строке с двумя знаками после запятой
+        try:
+            amount_str = format(amount, ".2f")
+        except Exception:
+            amount_str = str(amount)
+
+        # делаем подпись как раньше: "1 месяц — 100 ₽"
+        try:
+            amount_int = int(amount)
+        except (ValueError, TypeError):
+            amount_int = amount
+
+        label = f"{title} — {amount_int} ₽"
+
+        tariffs[code] = {
+            "amount": amount_str,
+            "label": label,
+        }
+
+
+    # Если по какой-то причине получилось пусто — тоже fallback
+    if not tariffs:
+        log.error("[Tariffs] Yookassa tariffs from DB are empty, using defaults.")
+        return {
+            "1m": {
+                "amount": "100.00",
+                "label": "1 месяц — 100 ₽",
+            },
+            "3m": {
+                "amount": "270.00",
+                "label": "3 месяца — 270 ₽",
+            },
+            "6m": {
+                "amount": "480.00",
+                "label": "6 месяцев — 480 ₽",
+            },
+            "1y": {
+                "amount": "840.00",
+                "label": "1 год — 840 ₽",
+            },
+            "forever": {
+                "amount": "1990.00",
+                "label": "Навсегда — 1990 ₽",
+            },
+        }
+
+    return tariffs
+
+
+def load_heleket_tariffs_from_db() -> Dict[str, Dict[str, str]]:
+    """
+    Загружает тарифы для Heleket из БД и возвращает dict вида:
+    {
+        "1m": {"amount": "1.00", "label": "1 месяц — 1 $"},
+        ...
+    }
+    """
+    tariffs: Dict[str, Dict[str, str]] = {}
+
+    try:
+        rows = db.get_tariffs_for_heleket()
+    except Exception as e:
+        log.error(
+            "[Tariffs] Failed to load Heleket tariffs from DB, will use defaults: %r",
+            e,
+        )
+        return {
+            "1m": {
+                "amount": "1.00",
+                "label": "1 месяц — 1 $",
+            },
+            "3m": {
+                "amount": "3.00",
+                "label": "3 месяца — 3 $",
+            },
+            "6m": {
+                "amount": "6.00",
+                "label": "6 месяцев — 6 $",
+            },
+            "1y": {
+                "amount": "12.00",
+                "label": "1 год — 12 $",
+            },
+            "forever": {
+                "amount": "25.00",
+                "label": "Навсегда — 25 $",
+            },
+        }
+
+    for row in rows:
+        code = row.get("code")
+        title = row.get("title")
+        amount = row.get("heleket_amount")
+
+        if not code or title is None or amount is None:
+            continue
+
+        try:
+            amount_str = format(amount, ".2f")
+        except Exception:
+            amount_str = str(amount)
+
+        # подпись в стиле: "1 месяц — 1 $"
+        try:
+            amount_int = int(amount)
+        except (ValueError, TypeError):
+            amount_int = amount
+
+        label = f"{title} — {amount_int} $"
+
+        tariffs[code] = {
+            "amount": amount_str,
+            "label": label,
+        }
+
+
+    if not tariffs:
+        log.error("[Tariffs] Heleket tariffs from DB are empty, using defaults.")
+        return {
+            "1m": {
+                "amount": "1.00",
+                "label": "1 месяц — 1 $",
+            },
+            "3m": {
+                "amount": "3.00",
+                "label": "3 месяца — 3 $",
+            },
+            "6m": {
+                "amount": "6.00",
+                "label": "6 месяцев — 6 $",
+            },
+            "1y": {
+                "amount": "12.00",
+                "label": "1 год — 12 $",
+            },
+            "forever": {
+                "amount": "25.00",
+                "label": "Навсегда — 25 $",
+            },
+        }
+
+    return tariffs
+
+
+def build_tariff_keyboard_from_dict(
+    tariffs: Dict[str, Dict[str, str]],
+    prefix: str,
+) -> InlineKeyboardMarkup:
+    """
+    Строит InlineKeyboardMarkup из словаря тарифов.
+    prefix:
+        - "pay"     -> callback_data="pay:tariff:<code>"
+        - "heleket" -> callback_data="heleket:tariff:<code>"
+    """
+    inline_keyboard: List[List[InlineKeyboardButton]] = []
+
+    for code, tariff in tariffs.items():
+        label = tariff.get("label") or code
+        callback_data = f"{prefix}:tariff:{code}"
+
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=callback_data,
+                )
+            ]
+        )
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+# Загружаем тарифы из БД (или используем дефолты при ошибке)
+TARIFFS = load_yookassa_tariffs_from_db()
+HELEKET_TARIFFS = load_heleket_tariffs_from_db()
+
+# Клавиатуры для оплаты
+TARIFF_KEYBOARD = build_tariff_keyboard_from_dict(
+    tariffs=TARIFFS,
+    prefix="pay",
 )
 
-HELEKET_TARIFF_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="1 месяц — 1 $",
-                callback_data="heleket:tariff:1m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="3 месяца — 3 $",
-                callback_data="heleket:tariff:3m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="6 месяцев — 6 $",
-                callback_data="heleket:tariff:6m",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="1 год — 12 $",
-                callback_data="heleket:tariff:1y",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="Навсегда — 25 $",
-                callback_data="heleket:tariff:forever",
-            ),
-        ],
-    ]
+HELEKET_TARIFF_KEYBOARD = build_tariff_keyboard_from_dict(
+    tariffs=HELEKET_TARIFFS,
+    prefix="heleket",
 )
+
 
 
 
@@ -319,12 +441,6 @@ SUPPORT_TEXT = (
 
 
 SUBSCRIPTION_TEXT = (
-    "💳 <b>Тарифы MaxNet VPN</b>\n\n"
-    "🔹 <b>1 месяц</b> — <b>100 ₽</b>\n"
-    "🔹 <b>3 месяца</b> — <b>270 ₽</b>\n"
-    "🔹 <b>6 месяцев</b> — <b>480 ₽</b>\n"
-    "🔹 <b>1 год</b> — <b>840 ₽</b>\n"
-    "🔹 <b>Навсегда</b> — <b>1990 ₽</b>\n\n"
     "<b>Почему выгоднее брать сразу на дольше:</b>\n"
     "• 3 месяца: экономия <b>30 ₽</b> (−10% к помесячной оплате).\n"
     "• 6 месяцев: экономия <b>120 ₽</b> (−20% к помесячной оплате).\n"
@@ -338,19 +454,143 @@ SUBSCRIPTION_TEXT = (
 )
 
 
-PROMO_TEXT = (
+
+PROMO_TEXT_FALLBACK = (
     "🎯 <b>Как сэкономить на подписке MaxNet VPN</b>\n\n"
-    "Базовая цена — <b>100 ₽ в месяц</b> при оплате помесячно.\n\n"
-    "Если брать сразу на дольше, получается выгоднее:\n\n"
-    "• <b>3 месяца за 270 ₽</b>\n"
-    "  Вместо 300 ₽ при помесячной оплате — экономия <b>30 ₽</b> (−10%).\n\n"
-    "• <b>6 месяцев за 480 ₽</b>\n"
-    "  Вместо 600 ₽ при помесячной оплате — экономия <b>120 ₽</b> (−20%).\n\n"
-    "• <b>1 год за 840 ₽</b>\n"
-    "  Вместо 1200 ₽ при помесячной оплате — экономия <b>360 ₽</b> (−30%).\n\n"
-    "Тариф <b>«Навсегда» за 1990 ₽</b> окупается примерно за 2 года активного использования.\n\n"
+    "При оплате помесячно подписка обходится дороже, чем при оплате за 3, 6 или 12 месяцев сразу.\n\n"
+    "При предоплате за длительный срок ты экономишь по сравнению с помесячной оплатой.\n"
+    "Тариф «Навсегда» обычно окупается примерно за пару лет активного использования.\n\n"
     "Выбрать и оплатить подходящий тариф можно командой /buy или кнопками в /start."
 )
+
+
+def build_promo_text() -> str:
+    """
+    Строит текст для /promo на основе тарифов из БД.
+    Если что-то идёт не так, возвращает PROMO_TEXT_FALLBACK.
+    """
+    try:
+        rows = db.get_tariffs_for_yookassa()
+    except Exception as e:
+        log.error("[Promo] Failed to load tariffs for /promo from DB: %r", e)
+        return PROMO_TEXT_FALLBACK
+
+    # Превращаем в словарь по коду тарифа
+    tariffs_by_code = {}
+    for row in rows:
+        code = row.get("code")
+        amount = row.get("yookassa_amount")
+        duration_days = row.get("duration_days")
+        if not code or amount is None or duration_days is None:
+            continue
+        tariffs_by_code[code] = row
+
+    if not tariffs_by_code:
+        return PROMO_TEXT_FALLBACK
+
+    # Ищем базовый помесячный тариф
+    base = tariffs_by_code.get("1m")
+    if base is None:
+        # Если кода 1m нет — берём минимальный положительный срок
+        positive = [
+            r for r in tariffs_by_code.values()
+            if (r.get("duration_days") or 0) > 0
+        ]
+        if not positive:
+            return PROMO_TEXT_FALLBACK
+        base = min(positive, key=lambda r: r.get("duration_days") or 0)
+
+    base_price = base.get("yookassa_amount")
+    base_days = base.get("duration_days")
+
+    try:
+        base_price_float = float(base_price)
+        base_days_int = int(base_days)
+        if base_days_int <= 0:
+            raise ValueError("base_days_int <= 0")
+    except Exception:
+        return PROMO_TEXT_FALLBACK
+
+    lines: List[str] = []
+
+    # Заголовок
+    lines.append("🎯 <b>Как сэкономить на подписке MaxNet VPN</b>\n")
+
+    # Базовая цена
+    base_price_int = int(base_price_float)
+    lines.append(
+        f"Базовая цена — <b>{base_price_int} ₽ в месяц</b> при оплате помесячно.\n"
+    )
+
+    lines.append("Если брать сразу на дольше, получается выгоднее:\n")
+
+    def add_block(code: str, human_label: str) -> None:
+        t = tariffs_by_code.get(code)
+        if t is None:
+            return
+
+        amount = t.get("yookassa_amount")
+        duration_days = t.get("duration_days")
+
+        try:
+            amount_float = float(amount)
+            days_int = int(duration_days)
+            if days_int <= 0:
+                return
+        except Exception:
+            return
+
+        # Сколько "месяцев" в этом тарифе относительно базового
+        months = days_int / base_days_int
+        nominal = base_price_float * months
+        economy = nominal - amount_float
+        if economy <= 0:
+            return
+
+        try:
+            economy_int = int(round(economy))
+        except Exception:
+            economy_int = economy
+
+        try:
+            percent = int(round(economy / nominal * 100))
+        except Exception:
+            percent = 0
+
+        amount_int = int(amount_float)
+
+        lines.append(f"\n• <b>{human_label} за {amount_int} ₽</b>")
+        lines.append(
+            f"\n  Вместо {int(nominal)} ₽ при помесячной оплате — "
+            f"экономия <b>{economy_int} ₽</b> (−{percent}%)."
+        )
+
+    # Пытаемся добавить блоки 3м / 6м / 1г, если они есть в БД
+    add_block("3m", "3 месяца")
+    add_block("6m", "6 месяцев")
+    add_block("1y", "1 год")
+
+    # Тариф "Навсегда", если есть
+    forever = tariffs_by_code.get("forever")
+    if forever is not None:
+        amount = forever.get("yookassa_amount")
+        try:
+            amount_float = float(amount)
+            amount_int = int(amount_float)
+        except Exception:
+            amount_int = amount
+
+        lines.append(
+            f"\n\nТариф <b>«Навсегда» за {amount_int} ₽</b> "
+            "обычно окупается примерно за пару лет активного использования."
+        )
+
+    lines.append(
+        "\n\nВыбрать и оплатить подходящий тариф можно командой /buy или кнопками в /start."
+    )
+
+    return "\n".join(lines)
+
 
 
 
@@ -483,17 +723,60 @@ async def cmd_my_id(message: Message) -> None:
 
 @router.message(Command("subscription"))
 async def cmd_subscription(message: Message) -> None:
+    # Подтягиваем тарифы из БД
+    try:
+        tariffs = db.get_active_tariffs()
+    except Exception as e:
+        log.error("[Subscription] Failed to load tariffs from DB: %s", repr(e))
+        tariffs = []
+
+    lines = []
+
+    # Шапка
+    lines.append("💳 <b>Тарифы MaxNet VPN</b>\n")
+
+    if not tariffs:
+        # fallback, если с БД что-то не так
+        lines.append("Сейчас тарифы временно недоступны. Попробуй позже.\n")
+    else:
+        # Формируем список тарифов из таблицы tariffs
+        for t in tariffs:
+            title = t.get("title") or ""
+            amount = t.get("yookassa_amount")
+
+            # Красиво приводим сумму к целому числу, как у тебя было "100 ₽"
+            if amount is not None:
+                try:
+                    amount_str = str(int(amount))
+                except (ValueError, TypeError):
+                    amount_str = str(amount)
+            else:
+                amount_str = "?"
+
+            line = f"🔹 <b>{title}</b> — <b>{amount_str} ₽</b>"
+            lines.append(line)
+
+        lines.append("")  # пустая строка между списком и хвостом
+
+    # Приклеиваем хвост (об экономии, способах оплаты и т.д.)
+    lines.append(SUBSCRIPTION_TEXT)
+
+    text = "\n".join(lines)
+
     await message.answer(
-        SUBSCRIPTION_TEXT,
+        text,
         disable_web_page_preview=True,
     )
 
+
 @router.message(Command("promo"))
 async def cmd_promo(message: Message) -> None:
+    text = build_promo_text()
     await message.answer(
-        PROMO_TEXT,
+        text,
         disable_web_page_preview=True,
     )
+
 
 
 @router.message(Command("promo_code"))
