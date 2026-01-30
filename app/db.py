@@ -1932,10 +1932,12 @@ def get_or_create_referral_info(
     }
 
     Логика:
-    - гарантируем наличие user_profile (на будущее, если захочешь хранить флаги/мету);
-    - получаем (или создаём) активный реферальный код через create_or_get_referral_code;
-    - считаем, сколько людей пользователь уже привёл (referrals.referred_telegram_user_id);
-    - считаем, сколько из них оформили хотя бы одну подписку (наличие записи в vpn_subscriptions).
+    - гарантируем наличие user_profile;
+    - получаем (или создаём) активный реферальный код;
+    - считаем, сколько людей пользователь привёл;
+    - считаем, сколько из них ОПЛАТИЛИ подписку через YooKassa или Heleket:
+      смотрим записи в vpn_subscriptions с last_event_name, начинающимся на
+      'yookassa_payment_succeeded_' или 'heleket_payment_paid_'.
     """
     # На всякий случай гарантируем наличие записи профиля
     try:
@@ -1969,14 +1971,19 @@ def get_or_create_referral_info(
                 except (TypeError, ValueError):
                     invited_count = 0
 
-            # Сколько из приглашённых оформили хотя бы одну подписку
-            # (считаем distinct referred_telegram_user_id, у которых есть запись в vpn_subscriptions)
+            # Сколько из приглашённых оплатили подписку деньгами (YooKassa или Heleket).
+            # Берём distinct referred_telegram_user_id, у которых есть ХОТЯ БЫ ОДНА
+            # запись в vpn_subscriptions с last_event_name от успешного платежа.
             sql_paid = """
             SELECT COUNT(DISTINCT r.referred_telegram_user_id) AS cnt
             FROM referrals r
             JOIN vpn_subscriptions s
               ON s.telegram_user_id = r.referred_telegram_user_id
-            WHERE r.referrer_telegram_user_id = %s;
+            WHERE r.referrer_telegram_user_id = %s
+              AND (
+                    s.last_event_name LIKE 'yookassa_payment_succeeded_%%'
+                 OR s.last_event_name LIKE 'heleket_payment_paid_%%'
+              );
             """
             cur.execute(sql_paid, (telegram_user_id,))
             row2 = cur.fetchone()
