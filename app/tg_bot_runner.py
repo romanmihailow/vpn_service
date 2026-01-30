@@ -541,11 +541,25 @@ def build_promo_text() -> str:
             return
 
         # Сколько "месяцев" в этом тарифе относительно базового
-        months = days_int / base_days_int
+        months_raw = days_int / base_days_int
+        try:
+            months = int(round(months_raw))
+        except Exception:
+            months = 0
+
+        # На всякий случай защищаемся от 0 и отрицательных значений
+        if months <= 0:
+            return
+
         nominal = base_price_float * months
         economy = nominal - amount_float
         if economy <= 0:
             return
+
+        try:
+            nominal_int = int(round(nominal))
+        except Exception:
+            nominal_int = nominal
 
         try:
             economy_int = int(round(economy))
@@ -561,9 +575,10 @@ def build_promo_text() -> str:
 
         lines.append(f"\n• <b>{human_label} за {amount_int} ₽</b>")
         lines.append(
-            f"\n  Вместо {int(nominal)} ₽ при помесячной оплате — "
+            f"\n  Вместо {nominal_int} ₽ при помесячной оплате — "
             f"экономия <b>{economy_int} ₽</b> (−{percent}%)."
         )
+
 
     # Пытаемся добавить блоки 3м / 6м / 1г, если они есть в БД
     add_block("3m", "3 месяца")
