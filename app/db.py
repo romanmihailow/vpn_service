@@ -1842,3 +1842,153 @@ def apply_referral_rewards_for_subscription(
 
     result["awards"] = awards
     return result
+
+
+def register_referral_start(
+    invited_telegram_user_id: int,
+    referral_code: str,
+    raw_start_param: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Регистрирует факт захода по реферальному коду (deep-link /start <code>).
+
+    Логика:
+    - по коду ищем запись в referral_codes (только активные);
+    - проверяем, что приглашённый не равен рефереру;
+    - создаём связь в referrals (кто кого привёл) через create_referral_link;
+    - если реферер уже есть, self-ref и т.п. — не падаем, а просто возвращаем ошибку в result.
+
+    raw_start_param сейчас никуда не пишется, оставлен на будущее для логов.
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "error_message": None,
+        "referrer_telegram_user_id": None,
+    }
+
+    normalized_code = (referral_code or "").strip()
+    if not normalized_code:
+        result["error"] = "empty_code"
+        result["error_message"] = "Пустой реферальный код."
+        return result
+
+    # Находим код в таблице referral_codes (используем уже готовую функцию)
+    code_row = get_referral_code_by_code(normalized_code)
+    if code_row is None:
+        result["error"] = "code_not_found_or_inactive"
+        result["error_message"] = "Реферальный код не найден или неактивен."
+        return result
+
+    referrer_id = code_row.get("referrer_telegram_user_id")
+    if referrer_id is None:
+        result["error"] = "invalid_referrer"
+        result["error_message"] = "У реферального кода не указан владелец."
+        return result
+
+    try:
+        referrer_int = int(referrer_id)
+    except (TypeError, ValueError):
+        result["error"] = "invalid_referrer"
+        result["error_message"] = "Невалидный идентификатор реферера."
+        return result
+
+    # Нельзя быть реферером самому себе
+    if int(invited_telegram_user_id) == referrer_int:
+        result["error"] = "self_ref"
+        result["error_message"] = "Пользователь не может быть своим же реферером."
+        return result
+
+    # Пытаемся создать связь в referrals
+    link_res = create_referral_link(
+        referred_telegram_user_id=invited_telegram_user_id,
+        referrer_telegram_user_id=referrer_int,
+    )
+
+    if not link_res.get("ok"):
+        # Если уже есть реферер — это не критическая ошибка, просто возвращаем инфу
+        result["error"] = link_res.get("error") or "link_failed"
+        result["error_message"] = link_res.get("error_message") or "Не удалось создать реферальную связь."
+        result["referrer_telegram_user_id"] = referrer_int
+        return result
+
+    result["ok"] = True
+    result["referrer_telegram_user_id"] = referrer_int
+    return result
+
+
+def get_or_create_referral_info(
+    telegram_user_id: int,
+    telegram_username: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Возвращает информацию для /ref:
+
+    {
+        "ok": True,
+        "ref_code": "REF123456789",
+        "invited_count": 10,
+        "paid_referrals_count": 3,
+    }
+
+    Логика:
+    - гарантируем наличие user_profile (на будущее, если захочешь хранить флаги/мету);
+    - получаем (или создаём) активный реферальный код через create_or_get_referral_code;
+    - считаем, сколько людей пользователь уже привёл (referrals.referred_telegram_user_id);
+    - считаем, сколько из них оформили хотя бы одну подписку (наличие записи в vpn_subscriptions).
+    """
+    # На всякий случай гарантируем наличие записи профиля
+    try:
+        ensure_user_profile(telegram_user_id=telegram_user_id)
+    except Exception:
+        # Профиль — необязательная часть, не блокируем работу /ref
+        pass
+
+    # Получаем или создаём реферальный код
+    code_res = create_or_get_referral_code(referrer_telegram_user_id=telegram_user_id)
+    ref_code: Optional[str] = None
+    if code_res.get("ok"):
+        ref_code = code_res.get("code")
+
+    invited_count = 0
+    paid_referrals_count = 0
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Сколько людей указали этого юзера как реферера
+            sql_invited = """
+            SELECT COUNT(*) AS cnt
+            FROM referrals
+            WHERE referrer_telegram_user_id = %s;
+            """
+            cur.execute(sql_invited, (telegram_user_id,))
+            row = cur.fetchone()
+            if row is not None and row[0] is not None:
+                try:
+                    invited_count = int(row[0])
+                except (TypeError, ValueError):
+                    invited_count = 0
+
+            # Сколько из приглашённых оформили хотя бы одну подписку
+            # (считаем distinct referred_telegram_user_id, у которых есть запись в vpn_subscriptions)
+            sql_paid = """
+            SELECT COUNT(DISTINCT r.referred_telegram_user_id) AS cnt
+            FROM referrals r
+            JOIN vpn_subscriptions s
+              ON s.telegram_user_id = r.referred_telegram_user_id
+            WHERE r.referrer_telegram_user_id = %s;
+            """
+            cur.execute(sql_paid, (telegram_user_id,))
+            row2 = cur.fetchone()
+            if row2 is not None and row2[0] is not None:
+                try:
+                    paid_referrals_count = int(row2[0])
+                except (TypeError, ValueError):
+                    paid_referrals_count = 0
+
+    return {
+        "ok": True,
+        "ref_code": ref_code,
+        "invited_count": invited_count,
+        "paid_referrals_count": paid_referrals_count,
+    }
