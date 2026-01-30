@@ -3603,6 +3603,9 @@ async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
     
+    # Инициализируем БД (создаём таблицы, если их ещё нет)
+    db.init_db()
+    
     from aiohttp import web
     from .yookassa_webhook_runner import create_app
     from aiogram.client.default import DefaultBotProperties
@@ -3627,6 +3630,7 @@ async def main() -> None:
     await site.start()
 
     await dp.start_polling(bot)
+
 
 
 

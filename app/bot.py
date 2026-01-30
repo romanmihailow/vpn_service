@@ -167,6 +167,43 @@ async def send_subscription_extended_notification(
         await bot.session.close()
 
 
+async def send_referral_reward_notification(
+    telegram_user_id: int,
+    points_delta: int,
+    level: int | None,
+    tariff_code: str,
+    payment_channel: str,
+) -> None:
+    """
+    Уведомление пользователю о начислении реферальных баллов.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        sign = "+" if points_delta >= 0 else ""
+        level_part: str
+        if level is None:
+            level_part = ""
+        else:
+            level_part = f"\nУровень реферала: <b>{level}</b>"
+
+        text = (
+            "🎁 Тебе начислены реферальные баллы!\n\n"
+            f"Из-за оплаты подписки по твоей реферальной цепочке.\n"
+            f"Начислено: <b>{sign}{points_delta}</b> баллов.{level_part}\n\n"
+            f"Тариф: <b>{tariff_code}</b>\n"
+            f"Канал оплаты: <b>{payment_channel}</b>"
+        )
+
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+    finally:
+        await bot.session.close()
+
+
 async def send_subscription_expired_notification(
     telegram_user_id: int,
 ) -> None:

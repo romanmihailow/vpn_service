@@ -12,7 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
-from .bot import send_vpn_config_to_user, send_subscription_extended_notification
+from .bot import send_vpn_config_to_user, send_subscription_extended_notification, send_referral_reward_notification
 from .config import settings
 
 from .logger import get_yookassa_logger
@@ -924,6 +924,33 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 telegram_user_id,
                 rewards_result,
             )
+
+            # Уведомляем рефереров о начисленных баллах
+            try:
+                awards = rewards_result.get("awards") if isinstance(rewards_result, dict) else None
+                if awards:
+                    for award in awards:
+                        ref_tg_id = award.get("telegram_user_id") or award.get("user_telegram_id")
+                        points = award.get("points") or award.get("delta") or 0
+                        level = award.get("level")
+
+                        if not ref_tg_id or not points:
+                            continue
+
+                        await send_referral_reward_notification(
+                            telegram_user_id=ref_tg_id,
+                            points_delta=points,
+                            level=level,
+                            tariff_code=tariff_code,
+                            payment_channel="YooKassa",
+                        )
+            except Exception as e:
+                log.error(
+                    "[YooKassaWebhook] Failed to send referral reward notifications for payment_id=%s: %r",
+                    payment_id,
+                    e,
+                )
+
         except Exception as e:
             log.error(
                 "[YooKassaWebhook] Failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
@@ -931,6 +958,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 telegram_user_id,
                 e,
             )
+
 
         # Уведомляем админа о продлении платной подписки
         try:
@@ -1065,6 +1093,33 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 telegram_user_id,
                 rewards_result,
             )
+
+            # Уведомляем рефереров о начисленных баллах
+            try:
+                awards = rewards_result.get("awards") if isinstance(rewards_result, dict) else None
+                if awards:
+                    for award in awards:
+                        ref_tg_id = award.get("telegram_user_id") or award.get("user_telegram_id")
+                        points = award.get("points") or award.get("delta") or 0
+                        level = award.get("level")
+
+                        if not ref_tg_id or not points:
+                            continue
+
+                        await send_referral_reward_notification(
+                            telegram_user_id=ref_tg_id,
+                            points_delta=points,
+                            level=level,
+                            tariff_code=tariff_code,
+                            payment_channel="YooKassa",
+                        )
+            except Exception as e:
+                log.error(
+                    "[YooKassaWebhook] Failed to send referral reward notifications for payment_id=%s: %r",
+                    payment_id,
+                    e,
+                )
+
         except Exception as e:
             log.error(
                 "[YooKassaWebhook] Failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
@@ -1072,6 +1127,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
                 telegram_user_id,
                 e,
             )
+
     except Exception as e:
         log.error(
             "[YooKassaWebhook] Failed to insert subscription for tg_id=%s: %r",
