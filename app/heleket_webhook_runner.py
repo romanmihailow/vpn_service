@@ -454,6 +454,30 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             )
             return web.Response(text="ok (db extend error)")
 
+        # Реферальные бонусы за продление подписки
+        sub_id = base_sub["id"]
+        try:
+            rewards_result = db.apply_referral_rewards_for_subscription(
+                payer_telegram_user_id=telegram_user_id,
+                subscription_id=sub_id,
+                tariff_code=tariff_code,
+                payment_source="heleket",
+                payment_id=str(uuid) if uuid is not None else None,
+            )
+            log.info(
+                "[HeleketWebhook] referral_rewards_result for uuid=%s tg_id=%s: %r",
+                uuid,
+                telegram_user_id,
+                rewards_result,
+            )
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to apply referral rewards for uuid=%s tg_id=%s: %r",
+                uuid,
+                telegram_user_id,
+                e,
+            )
+
         try:
             await send_admin_payment_notification_heleket(
                 telegram_user_id=telegram_user_id,
@@ -485,6 +509,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             )
 
         return web.Response(text="ok (extended)")
+
 
     # если вообще нет активных подписок — создаём новую, как в YooKassa
 
@@ -539,7 +564,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
 
     # пишем подписку в БД
     try:
-        db.insert_subscription(
+        subscription_id = db.insert_subscription(
             tribute_user_id=0,
             telegram_user_id=telegram_user_id,
             telegram_user_name=None,
@@ -561,6 +586,29 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             client_ip,
             expires_at,
         )
+
+        # Реферальные бонусы за новую платную подписку
+        try:
+            rewards_result = db.apply_referral_rewards_for_subscription(
+                payer_telegram_user_id=telegram_user_id,
+                subscription_id=subscription_id,
+                tariff_code=tariff_code,
+                payment_source="heleket",
+                payment_id=str(uuid) if uuid is not None else None,
+            )
+            log.info(
+                "[HeleketWebhook] referral_rewards_result for uuid=%s tg_id=%s: %r",
+                uuid,
+                telegram_user_id,
+                rewards_result,
+            )
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to apply referral rewards for uuid=%s tg_id=%s: %r",
+                uuid,
+                telegram_user_id,
+                e,
+            )
     except Exception as e:
         log.error(
             "[HeleketWebhook] failed to insert subscription for tg_id=%s: %r",
@@ -568,6 +616,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             e,
         )
         return web.Response(text="ok (db error)")
+
 
     # шлём конфиг
     config_text = wg.build_client_config(

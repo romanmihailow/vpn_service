@@ -3,6 +3,7 @@ import psycopg2.extras
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
+import json
 from .config import settings
 
 
@@ -1320,3 +1321,524 @@ def get_heleket_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
             return row
+
+
+def get_tariff_for_referral_by_code(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает тариф по code для расчёта реферальных бонусов.
+    Нужны поля ref_base_bonus_points и ref_enabled.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        ref_base_bonus_points,
+        ref_enabled
+    FROM tariffs
+    WHERE code = %s
+      AND is_active = TRUE
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (code,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row
+
+
+def get_referral_levels() -> Dict[int, Dict[str, Any]]:
+    """
+    Возвращает словарь уровней рефералки:
+    {
+        1: {"multiplier": 1.0, "is_active": True},
+        2: {"multiplier": 0.5, "is_active": True},
+        ...
+    }
+    """
+    sql = """
+    SELECT level, multiplier, is_active
+    FROM referral_levels
+    ORDER BY level ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+
+    levels: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        try:
+            level_int = int(row["level"])
+        except (TypeError, ValueError):
+            continue
+
+        multiplier_val = row.get("multiplier")
+        try:
+            multiplier_float = float(multiplier_val) if multiplier_val is not None else 0.0
+        except (TypeError, ValueError):
+            multiplier_float = 0.0
+
+        levels[level_int] = {
+            "multiplier": multiplier_float,
+            "is_active": bool(row.get("is_active")),
+        }
+    return levels
+
+
+def get_referrer_telegram_id(
+    referred_telegram_user_id: int,
+) -> Optional[int]:
+    """
+    Возвращает telegram_user_id прямого реферера (1-я линия) для указанного пользователя,
+    либо None, если реферера нет.
+    """
+    sql = """
+    SELECT referrer_telegram_user_id
+    FROM referrals
+    WHERE referred_telegram_user_id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (referred_telegram_user_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            referrer_id = row[0]
+            if referrer_id is None:
+                return None
+            try:
+                return int(referrer_id)
+            except (TypeError, ValueError):
+                return None
+
+
+def get_referral_upline_chain(
+    referred_telegram_user_id: int,
+    max_levels: int = 5,
+) -> List[int]:
+    """
+    Строит цепочку рефереров сверху вниз для указанного пользователя.
+
+    Пример:
+        user -> [ref_lvl_1, ref_lvl_2, ref_lvl_3, ...]
+
+    Возвращает список telegram_user_id для уровней 1..max_levels.
+    Если кто-то в цепочке отсутствует — дальше не идём.
+    """
+    chain: List[int] = []
+    current_id: Optional[int] = referred_telegram_user_id
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for _ in range(max_levels):
+                if current_id is None:
+                    break
+
+                sql = """
+                SELECT referrer_telegram_user_id
+                FROM referrals
+                WHERE referred_telegram_user_id = %s;
+                """
+                cur.execute(sql, (current_id,))
+                row = cur.fetchone()
+                if not row:
+                    break
+
+                referrer_id = row[0]
+                if referrer_id is None:
+                    break
+
+                try:
+                    referrer_int = int(referrer_id)
+                except (TypeError, ValueError):
+                    break
+
+                chain.append(referrer_int)
+                current_id = referrer_int
+
+    return chain
+
+
+def create_referral_link(
+    referred_telegram_user_id: int,
+    referrer_telegram_user_id: int,
+) -> Dict[str, Any]:
+    """
+    Создаёт запись в referrals (кто кого привёл).
+
+    Ограничения:
+    - один referred_telegram_user_id может иметь только одного реферера;
+    - нельзя указывать себя самого в качестве реферера;
+    - если запись уже есть — возвращаем ошибку "already_has_referrer".
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "error_message": None,
+    }
+
+    if referred_telegram_user_id == referrer_telegram_user_id:
+        result["error"] = "self_ref"
+        result["error_message"] = "Нельзя указать себя самого как реферера."
+        return result
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # Проверяем, что у пользователя ещё нет реферера
+                sql_check = """
+                SELECT referrer_telegram_user_id
+                FROM referrals
+                WHERE referred_telegram_user_id = %s
+                FOR UPDATE;
+                """
+                cur.execute(sql_check, (referred_telegram_user_id,))
+                row = cur.fetchone()
+                if row is not None:
+                    result["error"] = "already_has_referrer"
+                    result["error_message"] = "Реферер для этого пользователя уже задан."
+                    return result
+
+                # Вставляем запись
+                sql_insert = """
+                INSERT INTO referrals (
+                    referred_telegram_user_id,
+                    referrer_telegram_user_id,
+                    created_at
+                )
+                VALUES (%s, %s, NOW());
+                """
+                cur.execute(
+                    sql_insert,
+                    (referred_telegram_user_id, referrer_telegram_user_id),
+                )
+
+            conn.commit()
+            result["ok"] = True
+            return result
+
+        except Exception as e:
+            conn.rollback()
+            result["error"] = "db_error"
+            result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
+            return result
+
+
+def get_referral_code_by_code(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает запись из referral_codes по коду (только активные).
+    """
+    normalized_code = (code or "").strip()
+    if not normalized_code:
+        return None
+
+    sql = """
+    SELECT
+        code,
+        referrer_telegram_user_id,
+        is_active,
+        created_at
+    FROM referral_codes
+    WHERE code = %s
+      AND is_active = TRUE
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (normalized_code,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row
+
+
+def create_or_get_referral_code(
+    referrer_telegram_user_id: int,
+) -> Dict[str, Any]:
+    """
+    Возвращает существующий активный реферальный код для пользователя
+    или создаёт новый.
+
+    Сейчас код генерится в формате "REF<telegram_id>".
+    Если вдруг такой код уже занят другим пользователем (маловероятно),
+    добавляем числовой суффикс.
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "error_message": None,
+        "code": None,
+        "referrer_telegram_user_id": referrer_telegram_user_id,
+    }
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1) Пытаемся найти уже существующий активный код этого пользователя
+                sql_select = """
+                SELECT code
+                FROM referral_codes
+                WHERE referrer_telegram_user_id = %s
+                  AND is_active = TRUE
+                ORDER BY created_at ASC
+                LIMIT 1;
+                """
+                cur.execute(sql_select, (referrer_telegram_user_id,))
+                row = cur.fetchone()
+                if row is not None:
+                    result["ok"] = True
+                    result["code"] = row["code"]
+                    return result
+
+                # 2) Активного кода нет — генерим новый
+                base_code = f"REF{referrer_telegram_user_id}"
+                candidate = base_code
+                attempt = 0
+
+                while True:
+                    try:
+                        sql_insert = """
+                        INSERT INTO referral_codes (
+                            code,
+                            referrer_telegram_user_id,
+                            is_active,
+                            created_at
+                        )
+                        VALUES (%s, %s, TRUE, NOW())
+                        RETURNING code;
+                        """
+                        cur.execute(
+                            sql_insert,
+                            (candidate, referrer_telegram_user_id),
+                        )
+                        inserted = cur.fetchone()
+                        if inserted is None:
+                            raise RuntimeError("Failed to insert referral code")
+                        final_code = inserted["code"]
+                        break
+                    except psycopg2.IntegrityError:
+                        # Конфликт по PRIMARY KEY (code) — генерим новый вариант
+                        conn.rollback()
+                        attempt += 1
+                        candidate = f"{base_code}_{attempt}"
+                        continue
+
+            conn.commit()
+            result["ok"] = True
+            result["code"] = final_code
+            return result
+
+        except Exception as e:
+            conn.rollback()
+            result["error"] = "db_error"
+            result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
+            return result
+
+
+def ensure_user_profile(
+    telegram_user_id: int,
+) -> None:
+    """
+    Гарантирует наличие записи в user_profiles для указанного пользователя.
+    Если записи нет — создаёт её с дефолтными значениями.
+    """
+    sql = """
+    INSERT INTO user_profiles (telegram_user_id, is_referral_blocked, is_banned, created_at, updated_at)
+    VALUES (%s, FALSE, FALSE, NOW(), NOW())
+    ON CONFLICT (telegram_user_id) DO NOTHING;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+        conn.commit()
+
+
+def get_user_profile(
+    telegram_user_id: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает профиль пользователя из user_profiles.
+    Если записи нет — возвращает None.
+    """
+    sql = """
+    SELECT
+        telegram_user_id,
+        is_referral_blocked,
+        is_banned,
+        created_at,
+        updated_at
+    FROM user_profiles
+    WHERE telegram_user_id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row
+
+
+def is_user_referral_blocked(
+    telegram_user_id: int,
+) -> bool:
+    """
+    Возвращает True, если для пользователя включён флаг is_referral_blocked.
+    Если записи в user_profiles нет — считаем, что блокировки нет (False).
+    """
+    profile = get_user_profile(telegram_user_id=telegram_user_id)
+    if profile is None:
+        return False
+    return bool(profile.get("is_referral_blocked"))
+
+
+def set_user_referral_blocked(
+    telegram_user_id: int,
+    blocked: bool,
+) -> None:
+    """
+    Устанавливает флаг is_referral_blocked для пользователя.
+    При необходимости создаёт запись в user_profiles.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            sql = """
+            INSERT INTO user_profiles (telegram_user_id, is_referral_blocked, is_banned, created_at, updated_at)
+            VALUES (%s, %s, FALSE, NOW(), NOW())
+            ON CONFLICT (telegram_user_id) DO UPDATE
+            SET is_referral_blocked = EXCLUDED.is_referral_blocked,
+                updated_at = NOW();
+            """
+            cur.execute(sql, (telegram_user_id, blocked))
+        conn.commit()
+
+
+def apply_referral_rewards_for_subscription(
+    payer_telegram_user_id: int,
+    subscription_id: int,
+    tariff_code: str,
+    payment_source: str,
+    payment_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Начисляет реферальные бонусы (поинты) за оплату подписки.
+
+    Логика:
+    - берём тариф по коду, проверяем ref_enabled и ref_base_bonus_points;
+    - строим цепочку рефереров 1..5 уровней;
+    - берём коэффициенты из referral_levels;
+    - для каждого уровня считаем бонус и вызываем add_points(...) с reason='ref_level_<N>'.
+
+    ВАЖНО:
+    - если тариф не даёт бонусов или нет рефереров — возвращаем ok=True, но без начислений;
+    - если payer помечен is_referral_blocked = TRUE — бонусы не начисляем.
+    """
+    result: Dict[str, Any] = {
+        "ok": True,
+        "skipped": None,
+        "awards": [],  # список начислений по уровням
+        "error": None,
+        "error_message": None,
+    }
+
+    # 1) Проверяем, не заблокирован ли плательщик для рефералки
+    if is_user_referral_blocked(payer_telegram_user_id):
+        result["skipped"] = "payer_referral_blocked"
+        return result
+
+    # 2) Тариф для рефералки
+    tariff = get_tariff_for_referral_by_code(code=tariff_code)
+    if not tariff:
+        result["skipped"] = "tariff_not_found_or_inactive"
+        return result
+
+    ref_enabled = bool(tariff.get("ref_enabled"))
+    base_bonus = tariff.get("ref_base_bonus_points")
+
+    try:
+        base_bonus_int = int(base_bonus) if base_bonus is not None else 0
+    except (TypeError, ValueError):
+        base_bonus_int = 0
+
+    if not ref_enabled or base_bonus_int <= 0:
+        result["skipped"] = "tariff_referral_disabled_or_zero_bonus"
+        return result
+
+    # 3) Цепочка рефереров
+    upline = get_referral_upline_chain(
+        referred_telegram_user_id=payer_telegram_user_id,
+        max_levels=5,
+    )
+    if not upline:
+        result["skipped"] = "no_referrers"
+        return result
+
+    # 4) Уровни рефералки
+    levels_cfg = get_referral_levels()
+    if not levels_cfg:
+        result["skipped"] = "no_referral_levels"
+        return result
+
+    awards: List[Dict[str, Any]] = []
+
+    for level_idx, referrer_id in enumerate(upline, start=1):
+        level_cfg = levels_cfg.get(level_idx)
+        if level_cfg is None:
+            # уровень не настроен — пропускаем
+            continue
+
+        if not level_cfg.get("is_active"):
+            # уровень выключен
+            continue
+
+        multiplier = level_cfg.get("multiplier") or 0.0
+        try:
+            multiplier_float = float(multiplier)
+        except (TypeError, ValueError):
+            multiplier_float = 0.0
+
+        if multiplier_float <= 0.0:
+            continue
+
+        # Считаем бонус для этого уровня
+        bonus_raw = base_bonus_int * multiplier_float
+        try:
+            bonus_int = int(round(bonus_raw))
+        except (TypeError, ValueError):
+            bonus_int = 0
+
+        if bonus_int <= 0:
+            continue
+
+        # Начисляем поинты рефереру
+        meta: Dict[str, Any] = {
+            "tariff_code": tariff_code,
+            "payer_telegram_user_id": payer_telegram_user_id,
+        }
+
+        add_res = add_points(
+            telegram_user_id=referrer_id,
+            delta=bonus_int,
+            reason=f"ref_level_{level_idx}",
+            source=payment_source,
+            related_subscription_id=subscription_id,
+            related_payment_id=payment_id,
+            level=level_idx,
+            meta=meta,
+            allow_negative=False,
+        )
+
+        awards.append(
+            {
+                "level": level_idx,
+                "referrer_telegram_user_id": referrer_id,
+                "bonus": bonus_int,
+                "add_points_result": add_res,
+            }
+        )
+
+    result["awards"] = awards
+    return result

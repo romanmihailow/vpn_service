@@ -908,6 +908,30 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             )
             return web.Response(text="ok (db extend error)")
 
+        # Реферальные бонусы за продление подписки
+        sub_id = base_sub["id"]
+        try:
+            rewards_result = db.apply_referral_rewards_for_subscription(
+                payer_telegram_user_id=telegram_user_id,
+                subscription_id=sub_id,
+                tariff_code=tariff_code,
+                payment_source="yookassa",
+                payment_id=payment_id,
+            )
+            log.info(
+                "[YooKassaWebhook] referral_rewards_result for payment_id=%s tg_id=%s: %r",
+                payment_id,
+                telegram_user_id,
+                rewards_result,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
+                payment_id,
+                telegram_user_id,
+                e,
+            )
+
         # Уведомляем админа о продлении платной подписки
         try:
             await send_admin_payment_notification(
@@ -942,6 +966,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             # Не считаем это критичной ошибкой: подписка уже продлена
 
         return web.Response(text="ok (extended)")
+
 
 
 
@@ -1002,7 +1027,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
 
     # Пишем подписку в БД
     try:
-        db.insert_subscription(
+        subscription_id = db.insert_subscription(
             tribute_user_id=0,
             telegram_user_id=telegram_user_id,
             telegram_user_name=telegram_user_name,
@@ -1024,6 +1049,29 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             client_ip,
             expires_at,
         )
+
+        # Реферальные бонусы за новую платную подписку
+        try:
+            rewards_result = db.apply_referral_rewards_for_subscription(
+                payer_telegram_user_id=telegram_user_id,
+                subscription_id=subscription_id,
+                tariff_code=tariff_code,
+                payment_source="yookassa",
+                payment_id=payment_id,
+            )
+            log.info(
+                "[YooKassaWebhook] referral_rewards_result for payment_id=%s tg_id=%s: %r",
+                payment_id,
+                telegram_user_id,
+                rewards_result,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
+                payment_id,
+                telegram_user_id,
+                e,
+            )
     except Exception as e:
         log.error(
             "[YooKassaWebhook] Failed to insert subscription for tg_id=%s: %r",
@@ -1031,6 +1079,7 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
             e,
         )
         return web.Response(text="ok (db error)")
+
 
     log.info(
         "[YooKassaWebhook] issuing VPN config tg_id=%s payment_id=%s",
