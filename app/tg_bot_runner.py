@@ -1590,6 +1590,76 @@ async def cmd_status(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.message(Command("points"))
+async def cmd_points(message: Message) -> None:
+    """
+    Показывает текущий баланс поинтов и последние операции.
+    """
+    user = message.from_user
+    if user is None:
+        await message.answer(
+            "Не удалось определить твой Telegram ID. Попробуй ещё раз позже.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    telegram_user_id = user.id
+
+    try:
+        balance = db.get_user_points_balance(telegram_user_id=telegram_user_id)
+        transactions = db.get_user_points_last_transactions(
+            telegram_user_id=telegram_user_id,
+            limit=10,
+        )
+    except Exception as e:
+        log.error(
+            "[Points] Failed to fetch points for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await message.answer(
+            "Не удалось получить информацию по баллам. Попробуй позже или напиши в поддержку.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    lines: List[str] = []
+    lines.append("🎮 <b>Твои игровые баллы</b>\n")
+    lines.append(f"Текущий баланс: <b>{balance}</b> баллов.\n")
+
+    if not transactions:
+        lines.append("Пока у тебя нет операций по баллам.")
+    else:
+        lines.append("Последние операции:\n")
+        for tx in transactions:
+            delta = tx.get("delta") or 0
+            reason = tx.get("reason") or "-"
+            source = tx.get("source") or "-"
+            created_at = tx.get("created_at")
+            level = tx.get("level")
+
+            if isinstance(created_at, datetime):
+                created_str = created_at.strftime("%Y-%m-%d %H:%M")
+            else:
+                created_str = str(created_at)
+
+            sign = "+" if delta >= 0 else ""
+            if level is not None:
+                reason_display = f"{reason} (уровень {level})"
+            else:
+                reason_display = reason
+
+            lines.append(
+                f"• {created_str}: <b>{sign}{delta}</b> — {reason_display} [{source}]"
+            )
+
+    text = "\n".join(lines)
+
+    await message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
+
 
 @router.message(PromoStates.waiting_for_code)
 async def promo_code_apply(message: Message, state: FSMContext) -> None:
@@ -3314,6 +3384,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="start", description="Начать / подключить VPN"),
         BotCommand(command="help", description="Инструкция по подключению"),
         BotCommand(command="status", description="Статус VPN-подписки"),
+        BotCommand(command="points", description="Мой баланс баллов"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="promo", description="Выгодные варианты подписки"),
         BotCommand(command="promo_code", description="Применить промокод"),
@@ -3325,6 +3396,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 

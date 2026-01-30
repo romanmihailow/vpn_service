@@ -74,6 +74,12 @@ def init_db() -> None:
         -- Опционально: цена в баллах (на будущее)
         points_cost INTEGER,
 
+        -- Базовый бонус в баллах для 1-й линии рефералки
+        ref_base_bonus_points INTEGER,
+
+        -- Включена ли рефералка для этого тарифа
+        ref_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+
         -- Можно временно выключать тариф
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
 
@@ -92,6 +98,88 @@ def init_db() -> None:
 
     CREATE INDEX IF NOT EXISTS idx_tariffs_sort
         ON tariffs (sort_order);
+
+    --------------------------------------------------------------------
+    -- Баланс поинтов пользователя
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS user_points (
+        telegram_user_id BIGINT PRIMARY KEY,
+        balance BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    --------------------------------------------------------------------
+    -- Журнал операций с поинтами
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS user_points_transactions (
+        id BIGSERIAL PRIMARY KEY,
+        telegram_user_id BIGINT NOT NULL,
+        delta BIGINT NOT NULL,
+        reason VARCHAR(64) NOT NULL,             -- 'ref_level_1', 'ref_level_2', 'promo', 'admin', 'pay_tariff_points'
+        source VARCHAR(64) NOT NULL,             -- 'yookassa', 'heleket', 'tribute', 'manual', ...
+        related_subscription_id BIGINT,          -- ссылка на vpn_subscriptions.id (если есть)
+        related_payment_id VARCHAR(128),         -- id платежа из ЮKassa / Heleket, если есть
+        level INTEGER,                           -- уровень рефералки (1-5), если применимо
+        meta JSONB,                              -- доп. инфа: {"tariff_code": "1m", "referrer_id": 123}
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_user_points_transactions_user
+        ON user_points_transactions (telegram_user_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_user_points_transactions_payment
+        ON user_points_transactions (related_payment_id);
+
+    --------------------------------------------------------------------
+    -- Связь кто кого привёл (прямой реферер)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS referrals (
+        referred_telegram_user_id BIGINT PRIMARY KEY,   -- тот, кто пришёл
+        referrer_telegram_user_id BIGINT NOT NULL,      -- его прямой реферер (1-я линия)
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT referrals_no_self_ref
+            CHECK (referred_telegram_user_id <> referrer_telegram_user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_referrals_referrer
+        ON referrals (referrer_telegram_user_id);
+
+    --------------------------------------------------------------------
+    -- Реферальные коды
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS referral_codes (
+        code VARCHAR(64) PRIMARY KEY,                 -- 'MAXNET123', 'ROMAN_VPN', ...
+        referrer_telegram_user_id BIGINT NOT NULL,    -- чей это код
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_referral_codes_referrer
+        ON referral_codes (referrer_telegram_user_id);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_referral_codes_referrer_active
+        ON referral_codes (referrer_telegram_user_id)
+        WHERE is_active = TRUE;
+
+    --------------------------------------------------------------------
+    -- Настройка уровней рефералки
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS referral_levels (
+        level INTEGER PRIMARY KEY,                 -- 1..5
+        multiplier NUMERIC(10, 4) NOT NULL,        -- 1.0000, 0.5000, ...
+        is_active BOOLEAN NOT NULL DEFAULT TRUE
+    );
+
+    --------------------------------------------------------------------
+    -- Профиль пользователя (флаги блокировок)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS user_profiles (
+        telegram_user_id BIGINT PRIMARY KEY,
+        is_referral_blocked BOOLEAN NOT NULL DEFAULT FALSE,   -- фрод / мошенник
+        is_banned BOOLEAN NOT NULL DEFAULT FALSE,             -- бан для бота (на будущее)
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     """
 
 
@@ -99,6 +187,7 @@ def init_db() -> None:
         with conn.cursor() as cur:
             cur.execute(create_table_sql)
         conn.commit()
+
 
 
 
@@ -617,6 +706,185 @@ def execute_sql(sql: str) -> None:
         with conn.cursor() as cur:
             cur.execute(sql)
         conn.commit()
+        
+def add_points(
+    telegram_user_id: int,
+    delta: int,
+    reason: str,
+    source: str,
+    related_subscription_id: Optional[int] = None,
+    related_payment_id: Optional[str] = None,
+    level: Optional[int] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    allow_negative: bool = False,
+) -> Dict[str, Any]:
+    """
+    Универсальная точка изменения баланса поинтов.
+
+    delta > 0  -> начисление поинтов
+    delta < 0  -> списание поинтов
+
+    Пишет:
+      - актуальный баланс в user_points
+      - запись в user_points_transactions
+
+    Если allow_negative = False и баланс ушёл бы в минус — операция не выполняется.
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "error_message": None,
+        "balance": None,
+    }
+
+    if delta == 0:
+        result["error"] = "zero_delta"
+        result["error_message"] = "Изменение баланса не может быть нулевым."
+        return result
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1) Получаем текущий баланс (если нет записи — считаем, что 0)
+                sql_select = """
+                SELECT balance
+                FROM user_points
+                WHERE telegram_user_id = %s
+                FOR UPDATE;
+                """
+                cur.execute(sql_select, (telegram_user_id,))
+                row = cur.fetchone()
+
+                if row is None or row.get("balance") is None:
+                    old_balance = 0
+                else:
+                    old_balance = int(row["balance"])
+
+                new_balance = old_balance + int(delta)
+
+                if not allow_negative and new_balance < 0:
+                    result["error"] = "insufficient_funds"
+                    result["error_message"] = "Недостаточно баллов для списания."
+                    result["balance"] = old_balance
+                    return result
+
+                # 2) Обновляем (или создаём) запись в user_points
+                sql_upsert = """
+                INSERT INTO user_points (telegram_user_id, balance, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (telegram_user_id) DO UPDATE
+                SET balance = EXCLUDED.balance,
+                    updated_at = NOW()
+                RETURNING balance;
+                """
+                cur.execute(sql_upsert, (telegram_user_id, new_balance))
+                row_balance = cur.fetchone()
+                if row_balance is None:
+                    raise RuntimeError("Failed to upsert user_points")
+
+                final_balance = int(row_balance["balance"])
+
+                # 3) Пишем транзакцию в журнал
+                sql_insert_tx = """
+                INSERT INTO user_points_transactions (
+                    telegram_user_id,
+                    delta,
+                    reason,
+                    source,
+                    related_subscription_id,
+                    related_payment_id,
+                    level,
+                    meta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """
+                meta_json = psycopg2.extras.Json(meta) if meta is not None else None
+
+                cur.execute(
+                    sql_insert_tx,
+                    (
+                        telegram_user_id,
+                        delta,
+                        reason,
+                        source,
+                        related_subscription_id,
+                        related_payment_id,
+                        level,
+                        meta_json,
+                    ),
+                )
+
+            conn.commit()
+
+            result["ok"] = True
+            result["balance"] = final_balance
+            return result
+
+        except Exception as e:
+            conn.rollback()
+            result["error"] = "db_error"
+            result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
+            return result
+
+
+def get_user_points_balance(
+    telegram_user_id: int,
+) -> int:
+    """
+    Возвращает текущий баланс поинтов пользователя.
+    Если записи нет — возвращает 0.
+    """
+    sql = """
+    SELECT balance
+    FROM user_points
+    WHERE telegram_user_id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            if not row:
+                return 0
+            balance = row[0]
+            if balance is None:
+                return 0
+            try:
+                return int(balance)
+            except (TypeError, ValueError):
+                return 0
+
+
+def get_user_points_last_transactions(
+    telegram_user_id: int,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает последние N операций по поинтам пользователя
+    (для отображения в /points).
+    """
+    sql = """
+    SELECT
+        id,
+        telegram_user_id,
+        delta,
+        reason,
+        source,
+        related_subscription_id,
+        related_payment_id,
+        level,
+        meta,
+        created_at
+    FROM user_points_transactions
+    WHERE telegram_user_id = %s
+    ORDER BY created_at DESC, id DESC
+    LIMIT %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (telegram_user_id, limit))
+            rows = cur.fetchall()
+            return list(rows)
+
         
 def link_promo_usage_to_subscription(
     usage_id: int,
