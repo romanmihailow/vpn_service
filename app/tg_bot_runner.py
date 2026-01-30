@@ -1625,6 +1625,7 @@ async def cmd_status(message: Message) -> None:
 async def cmd_ref(message: Message) -> None:
     """
     Показывает реферальную ссылку и статистику приглашённых.
+    В том числе по линиям (1–5).
     """
     user = message.from_user
     if user is None:
@@ -1658,6 +1659,9 @@ async def cmd_ref(message: Message) -> None:
     invited_count = info.get("invited_count") or 0
     paid_referrals_count = info.get("paid_referrals_count") or 0
 
+    invited_by_levels = info.get("invited_by_levels") or {}
+    paid_by_levels = info.get("paid_by_levels") or {}
+
     # Пытаемся получить username бота, чтобы собрать полноценную ссылку
     try:
         me = await message.bot.get_me()
@@ -1690,8 +1694,19 @@ async def cmd_ref(message: Message) -> None:
         lines.append(f"<code>{deep_link}</code>\n")
 
     lines.append("\n<b>Статистика приглашений:</b>")
-    lines.append(f"\n• Всего приглашённых: <b>{invited_count}</b>")
+    lines.append(f"\n• Всего приглашённых (1-я линия): <b>{invited_count}</b>")
     lines.append(f"\n• Из них оплатили подписку: <b>{paid_referrals_count}</b>")
+
+    # Если есть данные по уровням — показываем красиво
+    if invited_by_levels:
+        lines.append("\n\n<b>По уровням (1–5):</b>")
+        for level in sorted(invited_by_levels.keys()):
+            lvl_inv = invited_by_levels.get(level) or 0
+            lvl_paid = paid_by_levels.get(level) or 0
+            lines.append(
+                f"\n• Уровень {level}: приглашённых — <b>{lvl_inv}</b>, "
+                f"оплатили — <b>{lvl_paid}</b>"
+            )
 
     text = "\n".join(lines)
 
@@ -1699,6 +1714,7 @@ async def cmd_ref(message: Message) -> None:
         text,
         disable_web_page_preview=True,
     )
+
 
 @router.message(Command("points"))
 async def cmd_points(message: Message) -> None:

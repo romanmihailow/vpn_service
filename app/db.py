@@ -1929,15 +1929,18 @@ def get_or_create_referral_info(
         "ref_code": "REF123456789",
         "invited_count": 10,
         "paid_referrals_count": 3,
+        "invited_by_levels": {1: 7, 2: 3},
+        "paid_by_levels": {1: 2, 2: 1},
     }
 
     Логика:
     - гарантируем наличие user_profile;
     - получаем (или создаём) активный реферальный код;
-    - считаем, сколько людей пользователь привёл;
-    - считаем, сколько из них ОПЛАТИЛИ подписку через YooKassa или Heleket:
-      смотрим записи в vpn_subscriptions с last_event_name, начинающимся на
-      'yookassa_payment_succeeded_' или 'heleket_payment_paid_'.
+    - считаем, сколько людей пользователь привёл по 1-й линии;
+    - считаем, сколько из них оплатили (по 1-й линии);
+    - дополнительно строим дерево downline до 5-го уровня и считаем по уровням:
+      * invited_by_levels[level]  — сколько приглашённых на уровне;
+      * paid_by_levels[level]     — сколько из них оплатили.
     """
     # На всякий случай гарантируем наличие записи профиля
     try:
@@ -1955,9 +1958,14 @@ def get_or_create_referral_info(
     invited_count = 0
     paid_referrals_count = 0
 
+    # Для уровней
+    max_levels = 5
+    invited_by_levels: Dict[int, int] = {}
+    paid_by_levels: Dict[int, int] = {}
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Сколько людей указали этого юзера как реферера
+            # --------- 1. Сколько людей по 1-й линии ---------
             sql_invited = """
             SELECT COUNT(*) AS cnt
             FROM referrals
@@ -1971,9 +1979,7 @@ def get_or_create_referral_info(
                 except (TypeError, ValueError):
                     invited_count = 0
 
-            # Сколько из приглашённых оплатили подписку деньгами (YooKassa или Heleket).
-            # Берём distinct referred_telegram_user_id, у которых есть ХОТЯ БЫ ОДНА
-            # запись в vpn_subscriptions с last_event_name от успешного платежа.
+            # --------- 2. Сколько из приглашённых оплатили (1-я линия) ---------
             sql_paid = """
             SELECT COUNT(DISTINCT r.referred_telegram_user_id) AS cnt
             FROM referrals r
@@ -1993,9 +1999,96 @@ def get_or_create_referral_info(
                 except (TypeError, ValueError):
                     paid_referrals_count = 0
 
+        # --------- 3. Строим дерево рефералов до 5-го уровня ---------
+        # Загрузим все связи в память: referrer -> [referred...]
+        children_map: Dict[int, List[int]] = {}
+
+        with conn.cursor() as cur2:
+            sql_all_ref = """
+            SELECT referred_telegram_user_id, referrer_telegram_user_id
+            FROM referrals;
+            """
+            cur2.execute(sql_all_ref)
+            rows = cur2.fetchall()
+
+            for referred_id, referrer_id in rows:
+                try:
+                    referrer_int = int(referrer_id)
+                    referred_int = int(referred_id)
+                except (TypeError, ValueError):
+                    continue
+
+                children = children_map.get(referrer_int)
+                if children is None:
+                    children = []
+                    children_map[referrer_int] = children
+                children.append(referred_int)
+
+        # BFS по уровням
+        visited: set[int] = set()
+        current_level_users: List[int] = children_map.get(telegram_user_id, []).copy()
+        level = 1
+
+        # Подготовим данные для подсчёта оплат по уровням:
+        users_by_level: Dict[int, List[int]] = {}
+
+        while level <= max_levels and current_level_users:
+            # убираем дубликаты и уже пройденных
+            unique_users: List[int] = []
+            for uid in current_level_users:
+                if uid in visited:
+                    continue
+                visited.add(uid)
+                unique_users.append(uid)
+
+            if not unique_users:
+                break
+
+            invited_by_levels[level] = len(unique_users)
+            users_by_level[level] = unique_users
+
+            # формируем следующий уровень
+            next_level_users: List[int] = []
+            for uid in unique_users:
+                childs = children_map.get(uid)
+                if childs:
+                    next_level_users.extend(childs)
+
+            current_level_users = next_level_users
+            level += 1
+
+        # --------- 4. Считаем, сколько оплатили на каждом уровне ---------
+        with conn.cursor() as cur3:
+            for lvl, uids in users_by_level.items():
+                if not uids:
+                    paid_by_levels[lvl] = 0
+                    continue
+
+                # используем ANY(%s) для списка
+                sql_paid_lvl = """
+                SELECT COUNT(DISTINCT s.telegram_user_id) AS cnt
+                FROM vpn_subscriptions s
+                WHERE s.telegram_user_id = ANY(%s)
+                  AND (
+                        s.last_event_name LIKE 'yookassa_payment_succeeded_%%'
+                     OR s.last_event_name LIKE 'heleket_payment_paid_%%'
+                  );
+                """
+                cur3.execute(sql_paid_lvl, (uids,))
+                row = cur3.fetchone()
+                lvl_cnt = 0
+                if row is not None and row[0] is not None:
+                    try:
+                        lvl_cnt = int(row[0])
+                    except (TypeError, ValueError):
+                        lvl_cnt = 0
+                paid_by_levels[lvl] = lvl_cnt
+
     return {
         "ok": True,
         "ref_code": ref_code,
         "invited_count": invited_count,
         "paid_referrals_count": paid_referrals_count,
+        "invited_by_levels": invited_by_levels,
+        "paid_by_levels": paid_by_levels,
     }
