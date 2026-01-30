@@ -417,10 +417,41 @@ START_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
+    """
+    Стартовый экран бота.
+
+    Если команда /start пришла с параметром (deep-link / реферальный код),
+    пытаемся зарегистрировать переход по реферальной ссылке.
+    """
+    user = message.from_user
+
+    # Пытаемся вытащить параметр после /start (deep-link)
+    text = message.text or ""
+    parts = text.split(maxsplit=1)
+    start_param = None
+    if len(parts) == 2:
+        start_param = parts[1].strip()
+
+    if user is not None and start_param:
+        try:
+            db.register_referral_start(
+                invited_telegram_user_id=user.id,
+                referral_code=start_param,
+                raw_start_param=text,
+            )
+        except Exception as e:
+            log.error(
+                "[Referral] Failed to register referral start tg_id=%s param=%r: %r",
+                user.id,
+                start_param,
+                e,
+            )
+
     await message.answer(
         START_TEXT,
         reply_markup=SUBSCRIBE_KEYBOARD,
     )
+
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
@@ -1590,11 +1621,91 @@ async def cmd_status(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+@router.message(Command("ref"))
+async def cmd_ref(message: Message) -> None:
+    """
+    Показывает реферальную ссылку и статистику приглашённых.
+    """
+    user = message.from_user
+    if user is None:
+        await message.answer(
+            "Не удалось определить твой Telegram ID. Попробуй ещё раз позже.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    telegram_user_id = user.id
+    username = user.username
+
+    try:
+        info = db.get_or_create_referral_info(
+            telegram_user_id=telegram_user_id,
+            telegram_username=username,
+        )
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get referral info for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await message.answer(
+            "Не удалось получить реферальную информацию. Попробуй позже или напиши в поддержку.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    ref_code = info.get("ref_code")
+    invited_count = info.get("invited_count") or 0
+    paid_referrals_count = info.get("paid_referrals_count") or 0
+
+    # Пытаемся получить username бота, чтобы собрать полноценную ссылку
+    try:
+        me = await message.bot.get_me()
+        bot_username = me.username
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get bot username for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        bot_username = None
+
+    if bot_username and ref_code:
+        deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+    elif ref_code:
+        deep_link = f"/start {ref_code}"
+    else:
+        deep_link = None
+
+    lines: List[str] = []
+    lines.append("👥 <b>Твоя реферальная ссылка</b>\n")
+
+    if ref_code:
+        lines.append(f"Твой реферальный код: <code>{ref_code}</code>\n")
+    else:
+        lines.append("Не удалось сгенерировать реферальный код.\n")
+
+    if deep_link:
+        lines.append("Поделись этой ссылкой с друзьями:\n")
+        lines.append(f"<code>{deep_link}</code>\n")
+
+    lines.append("\n<b>Статистика приглашений:</b>")
+    lines.append(f"\n• Всего приглашённых: <b>{invited_count}</b>")
+    lines.append(f"\n• Из них оплатили подписку: <b>{paid_referrals_count}</b>")
+
+    text = "\n".join(lines)
+
+    await message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
+
 @router.message(Command("points"))
 async def cmd_points(message: Message) -> None:
     """
     Показывает текущий баланс поинтов и последние операции.
     """
+
     user = message.from_user
     if user is None:
         await message.answer(
@@ -3385,6 +3496,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="help", description="Инструкция по подключению"),
         BotCommand(command="status", description="Статус VPN-подписки"),
         BotCommand(command="points", description="Мой баланс баллов"),
+        BotCommand(command="ref", description="Моя реферальная ссылка"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="promo", description="Выгодные варианты подписки"),
         BotCommand(command="promo_code", description="Применить промокод"),
@@ -3396,6 +3508,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 
