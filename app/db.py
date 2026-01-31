@@ -463,19 +463,50 @@ def delete_subscription_by_id(
 ) -> bool:
     """
     Полностью удаляет подписку по id из базы.
+    Перед удалением обнуляет ссылки на эту подписку
+    в зависимых таблицах (если они есть).
     Возвращает True, если строка была удалена.
     """
-    sql = """
+    sql_clear_points = """
+    UPDATE user_points_transactions
+    SET related_subscription_id = NULL
+    WHERE related_subscription_id = %s;
+    """
+    sql_clear_promo_usages = """
+    UPDATE promo_code_usages
+    SET subscription_id = NULL
+    WHERE subscription_id = %s;
+    """
+    sql_delete = """
     DELETE FROM vpn_subscriptions
     WHERE id = %s;
     """
+
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (sub_id,))
+            # Пытаемся обнулить ссылки в user_points_transactions
+            try:
+                cur.execute(sql_clear_points, (sub_id,))
+            except Exception:
+                # Если таблицы нет или нет такого поля — просто идём дальше.
+                # Важнее не завалить удаление подписки.
+                pass
+
+            # Пытаемся обнулить ссылки в promo_code_usages
+            try:
+                cur.execute(sql_clear_promo_usages, (sub_id,))
+            except Exception:
+                # Та же логика — безопасно игнорируем, если таблицы нет
+                pass
+
+            # Теперь удаляем саму подписку
+            cur.execute(sql_delete, (sub_id,))
             deleted = cur.rowcount
+
         conn.commit()
 
     return deleted > 0
+
 
 def get_max_client_ip_last_octet() -> int:
     """
