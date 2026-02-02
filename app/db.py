@@ -181,7 +181,24 @@ def init_db() -> None:
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    --------------------------------------------------------------------
+    -- Уведомления по подпискам (о скором окончании / окончании)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS subscription_notifications (
+        id BIGSERIAL PRIMARY KEY,
+        subscription_id BIGINT NOT NULL REFERENCES vpn_subscriptions(id) ON DELETE CASCADE,
+        notification_type VARCHAR(32) NOT NULL, -- 'expires_3d', 'expires_1d', 'expired'
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_notifications_unique
+        ON subscription_notifications (subscription_id, notification_type);
+
+    CREATE INDEX IF NOT EXISTS idx_subscription_notifications_type
+        ON subscription_notifications (notification_type);
     """
+
 
 
     with get_conn() as conn:
@@ -709,7 +726,74 @@ def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
             rows = cur.fetchall()
             return [dict(r) for r in rows]
 
-        
+
+def create_subscription_notification(
+    subscription_id: int,
+    notification_type: str,
+) -> None:
+    """
+    Регистрирует факт отправки уведомления по подписке.
+
+    Идемпотентно: при повторном вызове с теми же (subscription_id, notification_type)
+    запись не будет дублироваться за счёт UNIQUE-индекса.
+    """
+    sql = """
+    INSERT INTO subscription_notifications (subscription_id, notification_type, sent_at)
+    VALUES (%s, %s, NOW())
+    ON CONFLICT (subscription_id, notification_type) DO NOTHING;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (subscription_id, notification_type))
+        conn.commit()
+
+
+def has_subscription_notification(
+    subscription_id: int,
+    notification_type: str,
+) -> bool:
+    """
+    Проверяет, отправляли ли уже уведомление нужного типа по этой подписке.
+    """
+    sql = """
+    SELECT 1
+    FROM subscription_notifications
+    WHERE subscription_id = %s
+      AND notification_type = %s
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (subscription_id, notification_type))
+            row = cur.fetchone()
+            return row is not None
+
+
+def get_subscriptions_expiring_in_window(
+    from_hours: int,
+    to_hours: int,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает активные подписки, у которых expires_at попадает
+    в окно (NOW() + from_hours .. NOW() + to_hours), в часах.
+
+    Используется для уведомлений о скором окончании подписки.
+    Пример:
+        get_subscriptions_expiring_in_window(72, 73)  # примерно за 3 дня
+        get_subscriptions_expiring_in_window(24, 25)  # примерно за 1 день
+    """
+    sql = """
+    SELECT *
+    FROM vpn_subscriptions
+    WHERE active = TRUE
+      AND expires_at > NOW() + (%s || ' hours')::interval
+      AND expires_at <= NOW() + (%s || ' hours')::interval;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (from_hours, to_hours))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
 
 
 def subscription_exists_by_event(event_name: str) -> bool:

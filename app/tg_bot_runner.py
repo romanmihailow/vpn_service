@@ -3542,6 +3542,146 @@ async def set_bot_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(commands)
 
+async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
+    """
+    Периодически проверяет подписки, срок которых скоро истекает,
+    и отправляет напоминания пользователям (за 3 дня и за 1 день).
+    """
+    while True:
+        try:
+            # --- Напоминание за 3 дня до окончания ---
+            subs_3d = db.get_subscriptions_expiring_in_window(72, 73)
+            for sub in subs_3d:
+                sub_id = sub.get("id")
+                telegram_user_id = sub.get("telegram_user_id")
+
+                if not sub_id or not telegram_user_id:
+                    continue
+
+                if db.has_subscription_notification(sub_id, "expires_3d"):
+                    continue
+
+                try:
+                    await bot.send_message(
+                        chat_id=telegram_user_id,
+                        text=(
+                            "🔔 Напоминание: твоя VPN-подписка MaxNet VPN истекает примерно через 3 дня.\n\n"
+                            "Чтобы не потерять доступ, продли подписку заранее:\n"
+                            "• команда /buy — оплата картой (ЮKassa)\n"
+                            "• команда /buy_crypto — оплата криптой (Heleket)\n\n"
+                            "Также ты можешь использовать реферальную программу и промокоды, "
+                            "чтобы снизить стоимость продления."
+                        ),
+                        disable_web_page_preview=True,
+                    )
+
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="expires_3d",
+                    )
+
+                    log.info(
+                        "[AutoNotify] Sent 3d-before-expire notification sub_id=%s tg_id=%s",
+                        sub_id,
+                        telegram_user_id,
+                    )
+
+                except TelegramForbiddenError:
+                    log.warning(
+                        "[AutoNotify] Bot is blocked by tg_id=%s (3d notice)",
+                        telegram_user_id,
+                    )
+                except TelegramRetryAfter as e:
+                    log.warning(
+                        "[AutoNotify] RetryAfter for tg_id=%s (3d notice): %s",
+                        telegram_user_id,
+                        e.retry_after,
+                    )
+                    await asyncio.sleep(e.retry_after)
+                except TelegramBadRequest as e:
+                    log.warning(
+                        "[AutoNotify] BadRequest for tg_id=%s (3d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+                except Exception as e:
+                    log.error(
+                        "[AutoNotify] Unexpected error for tg_id=%s (3d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+
+            # --- Напоминание за 1 день до окончания ---
+            subs_1d = db.get_subscriptions_expiring_in_window(24, 25)
+            for sub in subs_1d:
+                sub_id = sub.get("id")
+                telegram_user_id = sub.get("telegram_user_id")
+
+                if not sub_id or not telegram_user_id:
+                    continue
+
+                if db.has_subscription_notification(sub_id, "expires_1d"):
+                    continue
+
+                try:
+                    await bot.send_message(
+                        chat_id=telegram_user_id,
+                        text=(
+                            "⏰ Важно: твоя VPN-подписка MaxNet VPN истекает примерно через 1 день.\n\n"
+                            "Чтобы подключение не оборвалось, продли подписку прямо сейчас:\n"
+                            "• /buy — оплата картой (ЮKassa)\n"
+                            "• /buy_crypto — оплата криптовалютой (Heleket)\n\n"
+                            "Если у тебя есть промокод или баллы по реферальной программе, "
+                            "самое время ими воспользоваться 🙂"
+                        ),
+                        disable_web_page_preview=True,
+                    )
+
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="expires_1d",
+                    )
+
+                    log.info(
+                        "[AutoNotify] Sent 1d-before-expire notification sub_id=%s tg_id=%s",
+                        sub_id,
+                        telegram_user_id,
+                    )
+
+                except TelegramForbiddenError:
+                    log.warning(
+                        "[AutoNotify] Bot is blocked by tg_id=%s (1d notice)",
+                        telegram_user_id,
+                    )
+                except TelegramRetryAfter as e:
+                    log.warning(
+                        "[AutoNotify] RetryAfter for tg_id=%s (1d notice): %s",
+                        telegram_user_id,
+                        e.retry_after,
+                    )
+                    await asyncio.sleep(e.retry_after)
+                except TelegramBadRequest as e:
+                    log.warning(
+                        "[AutoNotify] BadRequest for tg_id=%s (1d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+                except Exception as e:
+                    log.error(
+                        "[AutoNotify] Unexpected error for tg_id=%s (1d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+
+        except Exception as e:
+            log.error(
+                "[AutoNotify] Unexpected error in auto_notify_expiring_subscriptions: %r",
+                e,
+            )
+
+        # Проверяем примерно раз в 10 минут
+        await asyncio.sleep(600)
+
 
 async def auto_deactivate_expired_subscriptions() -> None:
     """
