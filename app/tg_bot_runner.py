@@ -364,7 +364,7 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="💳 Оплатить картой (ЮKassa)",
+                text="🔐 Подключить VPN",
                 callback_data="pay:open",
             ),
         ],
