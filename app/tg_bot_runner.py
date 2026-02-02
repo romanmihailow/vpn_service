@@ -626,17 +626,6 @@ SUBSCRIPTION_TEXT = (
 )
 
 
-
-
-PROMO_TEXT_FALLBACK = (
-    "🎯 <b>Как сэкономить на подписке MaxNet VPN</b>\n\n"
-    "При оплате помесячно подписка обходится дороже, чем при оплате за 3, 6 или 12 месяцев сразу.\n\n"
-    "При предоплате за длительный срок ты экономишь по сравнению с помесячной оплатой.\n"
-    "Тариф «Навсегда» обычно окупается примерно за пару лет активного использования.\n\n"
-    "Выбрать и оплатить подходящий тариф можно командой /buy или кнопками в /start."
-)
-
-
 REF_INFO_TEXT = (
     "🤝 <b>Реферальная программа MaxNet VPN</b>\n\n"
     "Приглашай друзей по своей ссылке и получай баллы, которыми можно оплачивать подписку.\n\n"
@@ -666,153 +655,6 @@ REF_INFO_TEXT = (
     "обнулению баллов.\n\n"
     "Подробная статистика по приглашённым и уровням доступна в команде /ref."
 )
-
-
-def build_promo_text() -> str:
-    """
-    Строит текст для /promo на основе тарифов из БД.
-    Если что-то идёт не так, возвращает PROMO_TEXT_FALLBACK.
-    """
-
-    try:
-        rows = db.get_tariffs_for_yookassa()
-    except Exception as e:
-        log.error("[Promo] Failed to load tariffs for /promo from DB: %r", e)
-        return PROMO_TEXT_FALLBACK
-
-    # Превращаем в словарь по коду тарифа
-    tariffs_by_code = {}
-    for row in rows:
-        code = row.get("code")
-        amount = row.get("yookassa_amount")
-        duration_days = row.get("duration_days")
-        if not code or amount is None or duration_days is None:
-            continue
-        tariffs_by_code[code] = row
-
-    if not tariffs_by_code:
-        return PROMO_TEXT_FALLBACK
-
-    # Ищем базовый помесячный тариф
-    base = tariffs_by_code.get("1m")
-    if base is None:
-        # Если кода 1m нет — берём минимальный положительный срок
-        positive = [
-            r for r in tariffs_by_code.values()
-            if (r.get("duration_days") or 0) > 0
-        ]
-        if not positive:
-            return PROMO_TEXT_FALLBACK
-        base = min(positive, key=lambda r: r.get("duration_days") or 0)
-
-    base_price = base.get("yookassa_amount")
-    base_days = base.get("duration_days")
-
-    try:
-        base_price_float = float(base_price)
-        base_days_int = int(base_days)
-        if base_days_int <= 0:
-            raise ValueError("base_days_int <= 0")
-    except Exception:
-        return PROMO_TEXT_FALLBACK
-
-    lines: List[str] = []
-
-    # Заголовок
-    lines.append("🎯 <b>Как сэкономить на подписке MaxNet VPN</b>\n")
-
-    # Базовая цена
-    base_price_int = int(base_price_float)
-    lines.append(
-        f"Базовая цена — <b>{base_price_int} ₽ в месяц</b> при оплате помесячно.\n"
-    )
-
-    lines.append("Если брать сразу на дольше, получается выгоднее:\n")
-
-    def add_block(code: str, human_label: str) -> None:
-        t = tariffs_by_code.get(code)
-        if t is None:
-            return
-
-        amount = t.get("yookassa_amount")
-        duration_days = t.get("duration_days")
-
-        try:
-            amount_float = float(amount)
-            days_int = int(duration_days)
-            if days_int <= 0:
-                return
-        except Exception:
-            return
-
-        # Сколько "месяцев" в этом тарифе относительно базового
-        months_raw = days_int / base_days_int
-        try:
-            months = int(round(months_raw))
-        except Exception:
-            months = 0
-
-        # На всякий случай защищаемся от 0 и отрицательных значений
-        if months <= 0:
-            return
-
-        nominal = base_price_float * months
-        economy = nominal - amount_float
-        if economy <= 0:
-            return
-
-        try:
-            nominal_int = int(round(nominal))
-        except Exception:
-            nominal_int = nominal
-
-        try:
-            economy_int = int(round(economy))
-        except Exception:
-            economy_int = economy
-
-        try:
-            percent = int(round(economy / nominal * 100))
-        except Exception:
-            percent = 0
-
-        amount_int = int(amount_float)
-
-        lines.append(f"\n• <b>{human_label} за {amount_int} ₽</b>")
-        lines.append(
-            f"\n  Вместо {nominal_int} ₽ при помесячной оплате — "
-            f"экономия <b>{economy_int} ₽</b> (−{percent}%)."
-        )
-
-
-    # Пытаемся добавить блоки 3м / 6м / 1г, если они есть в БД
-    add_block("3m", "3 месяца")
-    add_block("6m", "6 месяцев")
-    add_block("1y", "1 год")
-
-    # Тариф "Навсегда", если есть
-    forever = tariffs_by_code.get("forever")
-    if forever is not None:
-        amount = forever.get("yookassa_amount")
-        try:
-            amount_float = float(amount)
-            amount_int = int(amount_float)
-        except Exception:
-            amount_int = amount
-
-        lines.append(
-            f"\n\nТариф <b>«Навсегда» за {amount_int} ₽</b> "
-            "обычно окупается примерно за пару лет активного использования."
-        )
-
-    lines.append(
-        "\n\nВыбрать и оплатить подходящий тариф можно командой /buy или кнопками в /start."
-    )
-
-    return "\n".join(lines)
-
-
-
 
 
 @router.message(Command("terms"))
@@ -987,16 +829,6 @@ async def cmd_subscription(message: Message) -> None:
         text,
         disable_web_page_preview=True,
     )
-
-
-@router.message(Command("promo"))
-async def cmd_promo(message: Message) -> None:
-    text = build_promo_text()
-    await message.answer(
-        text,
-        disable_web_page_preview=True,
-    )
-
 
 
 @router.message(Command("promo_code"))
@@ -3700,7 +3532,6 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="ref", description="Моя реферальная ссылка"),
         BotCommand(command="ref_info", description="Правила реферальной программы"),
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
-        BotCommand(command="promo", description="Выгодные варианты подписки"),
         BotCommand(command="promo_code", description="Применить промокод"),
         BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
         BotCommand(command="buy_crypto", description="Оплатить подписку криптой (Heleket)"),
@@ -3710,10 +3541,6 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
-
-
-
-
 
 
 async def auto_deactivate_expired_subscriptions() -> None:
