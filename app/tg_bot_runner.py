@@ -1677,7 +1677,7 @@ async def cmd_ref(message: Message) -> None:
 
     if deep_link:
         lines.append("Поделись этой ссылкой с друзьями:\n")
-        lines.append(f"<code>{deep_link}</code>\n")
+        lines.append(f'<a href="{deep_link}">{deep_link}</a>\n')
 
     lines.append("\n<b>Статистика приглашений:</b>")
     lines.append(f"\n• Всего приглашённых (1-я линия): <b>{invited_count}</b>")
