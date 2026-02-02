@@ -669,6 +669,27 @@ def get_active_subscriptions_for_telegram(
             return [dict(r) for r in rows]
 
 
+def has_referral_trial_subscription(
+    telegram_user_id: int,
+) -> bool:
+    """
+    Проверяет, есть ли у пользователя хотя бы одна подписка,
+    выданная как реферальный пробный доступ (last_event_name='referral_free_trial_7d').
+    """
+    sql = """
+    SELECT 1
+    FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND last_event_name = 'referral_free_trial_7d'
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            return row is not None
+
+
 def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
     """
     Возвращает все подписки, которые ещё помечены active=TRUE,
@@ -687,6 +708,7 @@ def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
             cur.execute(sql)
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
         
 
 

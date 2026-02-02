@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
 from aiogram.types import (
@@ -75,6 +75,113 @@ def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str)
 
 
 router = Router()
+
+
+async def try_give_referral_trial_7d(
+    telegram_user_id: int,
+    telegram_username: Optional[str],
+) -> None:
+    """
+    Пытается выдать пробный реферальный доступ на 7 дней.
+
+    Условия:
+    - у пользователя НЕТ активной подписки;
+    - пользователь ЕЩЁ НЕ получал реферальный триал (last_event_name='referral_free_trial_7d').
+    """
+    try:
+        # 1) Проверяем, нет ли уже активной подписки
+        active_sub = db.get_latest_subscription_for_telegram(
+            telegram_user_id=telegram_user_id,
+        )
+        if active_sub:
+            log.info(
+                "[ReferralTrial] Skip trial for tg_id=%s: already has active subscription id=%s",
+                telegram_user_id,
+                active_sub.get("id"),
+            )
+            return
+
+        # 2) Проверяем, не выдавали ли уже реферальный триал ранее
+        if db.has_referral_trial_subscription(telegram_user_id=telegram_user_id):
+            log.info(
+                "[ReferralTrial] Skip trial for tg_id=%s: referral trial already given earlier",
+                telegram_user_id,
+            )
+            return
+
+        # 3) На всякий случай выключим все активные подписки (если вдруг есть мусор)
+        deactivate_existing_active_subscriptions(
+            telegram_user_id=telegram_user_id,
+            reason="auto_replace_referral_trial_7d",
+        )
+
+        # 4) Генерим WG-ключи и IP
+        client_priv, client_pub = wg.generate_keypair()
+        client_ip = wg.generate_client_ip()
+        allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+        log.info(
+            "[ReferralTrial] Add peer (trial) pubkey=%s ip=%s for tg_id=%s",
+            client_pub,
+            allowed_ip,
+            telegram_user_id,
+        )
+        wg.add_peer(
+            public_key=client_pub,
+            allowed_ip=allowed_ip,
+            telegram_user_id=telegram_user_id,
+        )
+
+        # 5) Срок действия триала
+        expires_at = datetime.utcnow() + timedelta(days=7)
+
+        # 6) Пишем подписку в БД
+        sub_id = db.insert_subscription(
+            tribute_user_id=0,
+            telegram_user_id=telegram_user_id,
+            telegram_user_name=telegram_username,
+            subscription_id=0,
+            period_id=0,
+            period="referral_trial_7d",
+            channel_id=0,
+            channel_name="Referral trial",
+            vpn_ip=client_ip,
+            wg_private_key=client_priv,
+            wg_public_key=client_pub,
+            expires_at=expires_at,
+            event_name="referral_free_trial_7d",
+        )
+
+        log.info(
+            "[ReferralTrial] Trial subscription created: sub_id=%s tg_id=%s vpn_ip=%s expires_at=%s",
+            sub_id,
+            telegram_user_id,
+            client_ip,
+            expires_at,
+        )
+
+        # 7) Собираем конфиг и отправляем пользователю
+        config_text = wg.build_client_config(
+            client_private_key=client_priv,
+            client_ip=client_ip,
+        )
+
+        await send_vpn_config_to_user(
+            telegram_user_id=telegram_user_id,
+            config_text=config_text,
+            caption=(
+                "По реферальной ссылке тебе выдан пробный доступ к MaxNet VPN на 7 дней.\n\n"
+                "Ниже — конфиг WireGuard и QR для подключения."
+            ),
+        )
+
+    except Exception as e:
+        log.error(
+            "[ReferralTrial] Failed to issue referral trial for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TERMS_FILE_PATH = BASE_DIR / "TERMS.md"
@@ -405,6 +512,8 @@ async def cmd_start(message: Message) -> None:
 
     Если команда /start пришла с параметром (deep-link / реферальный код),
     пытаемся зарегистрировать переход по реферальной ссылке.
+    При успешной регистрации и если у пользователя нет подписки,
+    выдаём пробный реферальный доступ на 7 дней.
     """
     user = message.from_user
 
@@ -417,11 +526,59 @@ async def cmd_start(message: Message) -> None:
 
     if user is not None and start_param:
         try:
-            db.register_referral_start(
-                invited_telegram_user_id=user.id,
-                referral_code=start_param,
-                raw_start_param=text,
-            )
+            # 1. Пытаемся получить собственный реферальный код пользователя
+            #    (используем тот же метод, что и в /ref)
+            try:
+                ref_info = db.get_or_create_referral_info(
+                    telegram_user_id=user.id,
+                    telegram_username=user.username,
+                )
+                own_ref_code = ref_info.get("ref_code")
+            except Exception as e:
+                log.error(
+                    "[Referral] Failed to get own ref_code for tg_id=%s: %r",
+                    user.id,
+                    e,
+                )
+                own_ref_code = None
+
+            # 2. Если параметр /start совпадает с его собственным реф-кодом —
+            #    НЕ регистрируем переход по реферальной ссылке
+            if own_ref_code and own_ref_code == start_param:
+                log.info(
+                    "[Referral] Skip self-referral for tg_id=%s ref_code=%s",
+                    user.id,
+                    start_param,
+                )
+            else:
+                # 3. Регистрируем факт старта по реферальному коду
+                reg_res = db.register_referral_start(
+                    invited_telegram_user_id=user.id,
+                    referral_code=start_param,
+                    raw_start_param=text,
+                )
+
+                # 4. Если регистрация прошла успешно — пытаемся выдать триал на 7 дней
+                if reg_res and reg_res.get("ok"):
+                    try:
+                        await try_give_referral_trial_7d(
+                            telegram_user_id=user.id,
+                            telegram_username=user.username,
+                        )
+                    except Exception as e2:
+                        log.error(
+                            "[ReferralTrial] Error while giving trial for tg_id=%s: %r",
+                            user.id,
+                            e2,
+                        )
+                else:
+                    log.info(
+                        "[Referral] register_referral_start returned not ok for tg_id=%s param=%r res=%r",
+                        user.id,
+                        start_param,
+                        reg_res,
+                    )
+
         except Exception as e:
             log.error(
                 "[Referral] Failed to register referral start tg_id=%s param=%r: %r",
@@ -434,6 +591,7 @@ async def cmd_start(message: Message) -> None:
         START_TEXT,
         reply_markup=SUBSCRIBE_KEYBOARD,
     )
+
 
 
 @router.message(Command("help"))
