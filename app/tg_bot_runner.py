@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 from aiogram import Bot, Dispatcher, Router, F
@@ -1765,7 +1765,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
 
     # Вычисляем базовую дату окончания: либо с текущего момента,
     # либо от уже оплаченного срока, если он ещё в будущем.
-    base_expires_at = datetime.utcnow()
+    base_expires_at = datetime.now(timezone.utc)
     try:
         latest_sub = db.get_latest_subscription_for_telegram(
             telegram_user_id=telegram_user_id,
@@ -1785,8 +1785,12 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
 
     if latest_sub:
         old_expires_at = latest_sub.get("expires_at")
-        if isinstance(old_expires_at, datetime) and old_expires_at > base_expires_at:
-            base_expires_at = old_expires_at
+        if isinstance(old_expires_at, datetime):
+            # приводим к timezone-aware UTC, если вдруг прилетело без tzinfo
+            if old_expires_at.tzinfo is None:
+                old_expires_at = old_expires_at.replace(tzinfo=timezone.utc)
+            if old_expires_at > base_expires_at:
+                base_expires_at = old_expires_at
 
     # Выдаём подписку за баллы
     try:
