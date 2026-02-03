@@ -1765,7 +1765,15 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
 
     # Вычисляем базовую дату окончания: либо с текущего момента,
     # либо от уже оплаченного срока, если он ещё в будущем.
-    base_expires_at = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    base_expires_at = now_utc
+
+    latest_sub = None
+    extend_existing = False
+    reuse_priv = None
+    reuse_pub = None
+    reuse_ip = None
+
     try:
         latest_sub = db.get_latest_subscription_for_telegram(
             telegram_user_id=telegram_user_id,
@@ -1789,32 +1797,82 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             # приводим к timezone-aware UTC, если вдруг прилетело без tzinfo
             if old_expires_at.tzinfo is None:
                 old_expires_at = old_expires_at.replace(tzinfo=timezone.utc)
+            # если оплаченный срок в будущем — продлеваем от него
             if old_expires_at > base_expires_at:
                 base_expires_at = old_expires_at
 
+            # если есть активная подписка с ключами и IP, и она ещё не истекла —
+            # будем продлевать её без выдачи нового конфига
+            if (
+                latest_sub.get("active")
+                and old_expires_at > now_utc
+                and latest_sub.get("wg_private_key")
+                and latest_sub.get("wg_public_key")
+                and latest_sub.get("vpn_ip")
+            ):
+                extend_existing = True
+                reuse_priv = latest_sub.get("wg_private_key")
+                reuse_pub = latest_sub.get("wg_public_key")
+                reuse_ip = latest_sub.get("vpn_ip")
+
+
     # Выдаём подписку за баллы
     try:
-        # на всякий случай убираем старые активные подписки
-        deactivate_existing_active_subscriptions(
-            telegram_user_id=telegram_user_id,
-            reason="auto_replace_points_payment",
-        )
+        client_priv = None
+        client_pub = None
+        client_ip = None
+        send_config = True
 
-        client_priv, client_pub = wg.generate_keypair()
-        client_ip = wg.generate_client_ip()
-        allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+        if extend_existing and reuse_priv and reuse_pub and reuse_ip:
+            # Есть активная подписка с действующим сроком и валидными ключами/IP —
+            # продлеваем её, переиспользуя существующий конфиг.
+            # Сначала деактивируем старые записи и убираем peer, чтобы не было дубликатов.
+            deactivate_existing_active_subscriptions(
+                telegram_user_id=telegram_user_id,
+                reason="auto_replace_points_payment",
+            )
 
-        log.info(
-            "[PointsPay] Add peer (points) pubkey=%s ip=%s for tg_id=%s",
-            client_pub,
-            allowed_ip,
-            telegram_user_id,
-        )
-        wg.add_peer(
-            public_key=client_pub,
-            allowed_ip=allowed_ip,
-            telegram_user_id=telegram_user_id,
-        )
+            client_priv = reuse_priv
+            client_pub = reuse_pub
+            client_ip = reuse_ip
+            allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+            log.info(
+                "[PointsPay] Reuse existing peer (points) pubkey=%s ip=%s for tg_id=%s",
+                client_pub,
+                allowed_ip,
+                telegram_user_id,
+            )
+            wg.add_peer(
+                public_key=client_pub,
+                allowed_ip=allowed_ip,
+                telegram_user_id=telegram_user_id,
+            )
+
+            # Конфиг у пользователя уже есть, повторно не шлём
+            send_config = False
+        else:
+            # Обычный путь: новая подписка за баллы, выдаём новый конфиг
+            deactivate_existing_active_subscriptions(
+                telegram_user_id=telegram_user_id,
+                reason="auto_replace_points_payment",
+            )
+
+            client_priv, client_pub = wg.generate_keypair()
+            client_ip = wg.generate_client_ip()
+            allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+            log.info(
+                "[PointsPay] Add peer (points) pubkey=%s ip=%s for tg_id=%s",
+                client_pub,
+                allowed_ip,
+                telegram_user_id,
+            )
+            wg.add_peer(
+                public_key=client_pub,
+                allowed_ip=allowed_ip,
+                telegram_user_id=telegram_user_id,
+            )
 
         # ВАЖНО: продлеваем от base_expires_at, а не от "сейчас"
         expires_at = base_expires_at + timedelta(days=duration_int)
@@ -1880,19 +1938,26 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                 add_res.get("balance"),
             )
 
-        config_text = wg.build_client_config(
-            client_private_key=client_priv,
-            client_ip=client_ip,
-        )
+        if send_config:
+            config_text = wg.build_client_config(
+                client_private_key=client_priv,
+                client_ip=client_ip,
+            )
 
-        await send_vpn_config_to_user(
-            telegram_user_id=telegram_user_id,
-            config_text=config_text,
-            caption=(
-                "Подписка MaxNet VPN оплачена баллами.\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения."
-            ),
-        )
+            await send_vpn_config_to_user(
+                telegram_user_id=telegram_user_id,
+                config_text=config_text,
+                caption=(
+                    "Подписка MaxNet VPN оплачена баллами.\n\n"
+                    "Ниже — конфиг WireGuard и QR для подключения."
+                ),
+            )
+        else:
+            log.info(
+                "[PointsPay] Reused existing config for tg_id=%s sub_id=%s (no new config sent)",
+                telegram_user_id,
+                sub_id,
+            )
 
         if isinstance(expires_at, datetime):
             expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1908,6 +1973,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
         )
 
     except Exception as e:
+
         log.error(
             "[PointsPay] Failed to create subscription for tg_id=%s tariff=%s: %r",
             telegram_user_id,
