@@ -2819,6 +2819,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         )
         return
 
+
     extra_days = result.get("extra_days")
     new_expires_at = result.get("new_expires_at")
     promo_code = result.get("promo_code")
@@ -4485,4 +4486,181 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         telegram_user_id,
                     )
 
-                e
+                except TelegramForbiddenError:
+                    log.warning(
+                        "[AutoNotify] Bot is blocked by tg_id=%s (1d notice)",
+                        telegram_user_id,
+                    )
+                except TelegramRetryAfter as e:
+                    log.warning(
+                        "[AutoNotify] RetryAfter for tg_id=%s (1d notice): %s",
+                        telegram_user_id,
+                        e.retry_after,
+                    )
+                    await asyncio.sleep(e.retry_after)
+                except TelegramBadRequest as e:
+                    log.warning(
+                        "[AutoNotify] BadRequest for tg_id=%s (1d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+                except Exception as e:
+                    log.error(
+                        "[AutoNotify] Unexpected error for tg_id=%s (1d notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+
+            # --- Напоминание за 1 час до окончания ---
+            # Окно примерно от 1 до 2 часов до окончания (как и выше — в "часах", а не минутах)
+            subs_1h = db.get_subscriptions_expiring_in_window(1, 2)
+            for sub in subs_1h:
+                sub_id = sub.get("id")
+                telegram_user_id = sub.get("telegram_user_id")
+
+                if not sub_id or not telegram_user_id:
+                    continue
+
+                if db.has_subscription_notification(sub_id, "expires_1h"):
+                    continue
+
+                try:
+                    # Используем уже готовую функцию уведомления об окончании,
+                    # но вызываем её ЗА час до деактивации.
+                    await send_subscription_expired_notification(
+                        telegram_user_id=telegram_user_id,
+                    )
+
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="expires_1h",
+                    )
+
+                    log.info(
+                        "[AutoNotify] Sent 1h-before-expire notification sub_id=%s tg_id=%s",
+                        sub_id,
+                        telegram_user_id,
+                    )
+
+                except TelegramForbiddenError:
+                    log.warning(
+                        "[AutoNotify] Bot is blocked by tg_id=%s (1h notice)",
+                        telegram_user_id,
+                    )
+                except TelegramRetryAfter as e:
+                    log.warning(
+                        "[AutoNotify] RetryAfter for tg_id=%s (1h notice): %s",
+                        telegram_user_id,
+                        e.retry_after,
+                    )
+                    await asyncio.sleep(e.retry_after)
+                except TelegramBadRequest as e:
+                    log.warning(
+                        "[AutoNotify] BadRequest for tg_id=%s (1h notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+                except Exception as e:
+                    log.error(
+                        "[AutoNotify] Unexpected error for tg_id=%s (1h notice): %r",
+                        telegram_user_id,
+                        e,
+                    )
+
+        except Exception as e:
+            log.error(
+                "[AutoNotify] Unexpected error in auto_notify_expiring_subscriptions: %r",
+                e,
+            )
+
+        # Проверяем примерно раз в 10 минут
+        await asyncio.sleep(600)
+
+
+async def auto_deactivate_expired_subscriptions() -> None:
+    """
+    Периодически ищет в базе все активные подписки с истекшим expires_at,
+    деактивирует их и удаляет peer из WireGuard.
+    (Уведомление пользователю об окончании теперь отправляется заранее —
+    за ~1 час до окончания в auto_notify_expiring_subscriptions.)
+    """
+    while True:
+        try:
+            expired_subs = db.get_expired_active_subscriptions()
+            for sub in expired_subs:
+                sub_id = sub.get("id")
+                pub_key = sub.get("wg_public_key")
+
+                if not sub_id:
+                    continue
+
+                # помечаем неактивной в базе
+                deactivated = db.deactivate_subscription_by_id(
+                    sub_id=sub_id,
+                    event_name="auto_expire",
+                )
+
+                if not deactivated:
+                    continue
+
+                if pub_key:
+                    try:
+                        log.info(
+                            "[AutoExpire] Remove peer pubkey=%s for sub_id=%s",
+                            pub_key,
+                            sub_id,
+                        )
+                        wg.remove_peer(pub_key)
+                    except Exception as e:
+                        log.error(
+                            "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
+                            sub_id,
+                            repr(e),
+                        )
+
+        except Exception as e:
+            log.error(
+                "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
+                repr(e),
+            )
+
+        # Проверяем раз в 60 секунд (можешь настроить под себя)
+        await asyncio.sleep(60)
+
+
+async def main() -> None:
+    if not settings.TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
+    
+    # Инициализируем БД (создаём таблицы, если их ещё нет)
+    db.init_db()
+    
+    from aiohttp import web
+    from .yookassa_webhook_runner import create_app
+    from aiogram.client.default import DefaultBotProperties
+
+    bot = Bot(
+        token=settings.TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    dp = Dispatcher()
+    dp.include_router(router)
+
+    await set_bot_commands(bot)
+
+    # запускаем фоновые воркеры
+    asyncio.create_task(auto_deactivate_expired_subscriptions())
+    asyncio.create_task(auto_notify_expiring_subscriptions(bot))
+
+    app = create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
