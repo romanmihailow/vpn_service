@@ -1809,28 +1809,30 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
 
     if latest_sub:
         old_expires_at = latest_sub.get("expires_at")
+
+        # Нормализуем дату для расчёта продления
         if isinstance(old_expires_at, datetime):
-            # приводим к timezone-aware UTC, если вдруг прилетело без tzinfo
-            if old_expires_at.tzinfo is None:
+            if old_expires_at.tzinfo is not None:
+                old_expires_at = old_expires_at.astimezone(timezone.utc)
+            else:
                 old_expires_at = old_expires_at.replace(tzinfo=timezone.utc)
-            # если оплаченный срок в будущем — продлеваем от него
+
+            # Если срок ещё в будущем — продлеваем от него
             if old_expires_at > base_expires_at:
                 base_expires_at = old_expires_at
 
-            # если есть активная подписка с ключами и IP, и она ещё не истекла —
-            # будем продлевать её без выдачи нового конфига
-            if (
-                latest_sub.get("active")
-                and old_expires_at > now_utc
-                and latest_sub.get("wg_private_key")
-                and latest_sub.get("wg_public_key")
-                and latest_sub.get("vpn_ip")
-            ):
-                extend_existing = True
-                reuse_priv = latest_sub.get("wg_private_key")
-                reuse_pub = latest_sub.get("wg_public_key")
-                reuse_ip = latest_sub.get("vpn_ip")
-
+        # 🔁 ВАЖНОЕ ИЗМЕНЕНИЕ:
+        # Если у последней подписки есть ключи и IP — переиспользуем их,
+        # НЕ важно, активна она сейчас или уже деактивирована.
+        if (
+            latest_sub.get("wg_private_key")
+            and latest_sub.get("wg_public_key")
+            and latest_sub.get("vpn_ip")
+        ):
+            extend_existing = True
+            reuse_priv = latest_sub.get("wg_private_key")
+            reuse_pub = latest_sub.get("wg_public_key")
+            reuse_ip = latest_sub.get("vpn_ip")
 
     # Выдаём подписку за баллы
     try:
@@ -1840,9 +1842,8 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
         send_config = True
 
         if extend_existing and reuse_priv and reuse_pub and reuse_ip:
-            # Есть активная подписка с действующим сроком и валидными ключами/IP —
-            # продлеваем её, переиспользуя существующий конфиг.
-            # Сначала деактивируем старые записи и убираем peer, чтобы не было дубликатов.
+            # Есть последняя подписка с валидными ключами/IP —
+            # "оживляем" её конфиг (даже если она была деактивирована).
             deactivate_existing_active_subscriptions(
                 telegram_user_id=telegram_user_id,
                 reason="auto_replace_points_payment",
@@ -2623,7 +2624,40 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                 usage_id,
             )
 
-            # Пытаемся создать новую подписку и выдать конфиг
+            # Попробуем реанимировать последнюю деактивированную подписку (переиспользовать конфиг)
+            latest_sub = None
+            reuse_priv = None
+            reuse_pub = None
+            reuse_ip = None
+
+            try:
+                latest_sub = db.get_latest_subscription_for_telegram(
+                    telegram_user_id=user.id,
+                )
+                promo_log.info(
+                    "[PromoApply] Latest subscription for revive tg_id=%s: %r",
+                    user.id,
+                    latest_sub,
+                )
+            except Exception as e:
+                promo_log.error(
+                    "[PromoApply] Failed to get latest subscription for revive tg_id=%s: %r",
+                    user.id,
+                    e,
+                )
+                latest_sub = None
+
+            if latest_sub:
+                if (
+                    latest_sub.get("wg_private_key")
+                    and latest_sub.get("wg_public_key")
+                    and latest_sub.get("vpn_ip")
+                ):
+                    reuse_priv = latest_sub.get("wg_private_key")
+                    reuse_pub = latest_sub.get("wg_public_key")
+                    reuse_ip = latest_sub.get("vpn_ip")
+
+            # Пытаемся создать новую подписку (с реюзом конфига, если он есть)
             try:
                 # На всякий случай выключим все активные подписки (если вдруг что-то есть)
                 deactivate_existing_active_subscriptions(
@@ -2631,21 +2665,44 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                     reason="auto_replace_promo_new_sub",
                 )
 
-                client_priv, client_pub = wg.generate_keypair()
-                client_ip = wg.generate_client_ip()
-                allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+                send_config = True
 
-                log.info(
-                    "[PromoApply] Add peer (new sub) pubkey=%s ip=%s for tg_id=%s",
-                    client_pub,
-                    allowed_ip,
-                    user.id,
-                )
-                wg.add_peer(
-                    public_key=client_pub,
-                    allowed_ip=allowed_ip,
-                    telegram_user_id=user.id,
-                )
+                if reuse_priv and reuse_pub and reuse_ip:
+                    client_priv = reuse_priv
+                    client_pub = reuse_pub
+                    client_ip = reuse_ip
+                    allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+                    log.info(
+                        "[PromoApply] Reuse peer (new sub) pubkey=%s ip=%s for tg_id=%s",
+                        client_pub,
+                        allowed_ip,
+                        user.id,
+                    )
+                    wg.add_peer(
+                        public_key=client_pub,
+                        allowed_ip=allowed_ip,
+                        telegram_user_id=user.id,
+                    )
+
+                    # Конфиг уже есть у пользователя, повторно не шлём
+                    send_config = False
+                else:
+                    client_priv, client_pub = wg.generate_keypair()
+                    client_ip = wg.generate_client_ip()
+                    allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+                    log.info(
+                        "[PromoApply] Add peer (new sub) pubkey=%s ip=%s for tg_id=%s",
+                        client_pub,
+                        allowed_ip,
+                        user.id,
+                    )
+                    wg.add_peer(
+                        public_key=client_pub,
+                        allowed_ip=allowed_ip,
+                        telegram_user_id=user.id,
+                    )
 
                 if isinstance(new_expires_at, datetime):
                     expires_at = new_expires_at
@@ -2685,20 +2742,26 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                             e,
                         )
 
+                if send_config:
+                    config_text = wg.build_client_config(
+                        client_private_key=client_priv,
+                        client_ip=client_ip,
+                    )
 
-                config_text = wg.build_client_config(
-                    client_private_key=client_priv,
-                    client_ip=client_ip,
-                )
-
-                await send_vpn_config_to_user(
-                    telegram_user_id=user.id,
-                    config_text=config_text,
-                    caption=(
-                        "По промокоду тебе выдан доступ к MaxNet VPN.\n\n"
-                        "Ниже — конфиг WireGuard и QR для подключения."
-                    ),
-                )
+                    await send_vpn_config_to_user(
+                        telegram_user_id=user.id,
+                        config_text=config_text,
+                        caption=(
+                            "По промокоду тебе выдан доступ к MaxNet VPN.\n\n"
+                            "Ниже — конфиг WireGuard и QR для подключения."
+                        ),
+                    )
+                else:
+                    log.info(
+                        "[PromoApply] Reused existing config for tg_id=%s sub_id=%s (no new config sent)",
+                        user.id,
+                        new_sub_id,
+                    )
 
             except Exception as e:
                 log.error(
@@ -4303,7 +4366,7 @@ async def set_bot_commands(bot: Bot) -> None:
 async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
     """
     Периодически проверяет подписки, срок которых скоро истекает,
-    и отправляет напоминания пользователям (за 3 дня и за 1 день).
+    и отправляет напоминания пользователям (за 3 дня, за 1 день и за 1 час).
 
     Дополнительно:
     - не шлём уведомления ночью (по UTC: только 09–22);
@@ -4422,153 +4485,4 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         telegram_user_id,
                     )
 
-                except TelegramForbiddenError:
-                    log.warning(
-                        "[AutoNotify] Bot is blocked by tg_id=%s (1d notice)",
-                        telegram_user_id,
-                    )
-                except TelegramRetryAfter as e:
-                    log.warning(
-                        "[AutoNotify] RetryAfter for tg_id=%s (1d notice): %s",
-                        telegram_user_id,
-                        e.retry_after,
-                    )
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest as e:
-                    log.warning(
-                        "[AutoNotify] BadRequest for tg_id=%s (1d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-                except Exception as e:
-                    log.error(
-                        "[AutoNotify] Unexpected error for tg_id=%s (1d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-
-        except Exception as e:
-            log.error(
-                "[AutoNotify] Unexpected error in auto_notify_expiring_subscriptions: %r",
-                e,
-            )
-
-        # Проверяем примерно раз в 10 минут
-        await asyncio.sleep(600)
-
-
-async def auto_deactivate_expired_subscriptions() -> None:
-    """
-    Периодически ищет в базе все активные подписки с истекшим expires_at,
-    деактивирует их, удаляет peer из WireGuard и шлёт пользователю уведомление.
-    """
-    while True:
-        try:
-            expired_subs = db.get_expired_active_subscriptions()
-            for sub in expired_subs:
-                sub_id = sub.get("id")
-                pub_key = sub.get("wg_public_key")
-
-                if not sub_id:
-                    continue
-
-                # помечаем неактивной в базе
-                deactivated = db.deactivate_subscription_by_id(
-                    sub_id=sub_id,
-                    event_name="auto_expire",
-                )
-
-                if not deactivated:
-                    continue
-                
-                # защита от повторной обработки
-                if db.has_subscription_notification(sub_id, "expired"):
-                    continue
-
-                telegram_user_id = deactivated.get("telegram_user_id")
-
-                if pub_key:
-                    try:
-                        log.info(
-                            "[AutoExpire] Remove peer pubkey=%s for sub_id=%s",
-                            pub_key,
-                            sub_id,
-                        )
-                        wg.remove_peer(pub_key)
-                    except Exception as e:
-                        log.error(
-                            "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
-                            sub_id,
-                            repr(e),
-                        )
-
-                # Пытаемся отправить уведомление о том, что подписка закончилась
-                if telegram_user_id:
-                    try:
-                        await send_subscription_expired_notification(
-                            telegram_user_id=telegram_user_id,
-                        )
-                        db.create_subscription_notification(  # <-- НОВОЕ
-                            subscription_id=sub_id,           # <-- НОВОЕ
-                            notification_type="expired",      # <-- НОВОЕ
-                        )
-                        log.info(
-                            "[AutoExpire] Sent expiration notification to tg_id=%s for sub_id=%s",
-                            telegram_user_id,
-                            sub_id,
-                        )
-                    except Exception as e:
-                        log.error(
-                            "[AutoExpire] Failed to send expiration notification to tg_id=%s for sub_id=%s: %s",
-                            telegram_user_id,
-                            sub_id,
-                            repr(e),
-                        )
-
-
-        except Exception as e:
-            log.error(
-                "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
-                repr(e),
-            )
-
-        # Проверяем раз в 60 секунд (можешь настроить под себя)
-        await asyncio.sleep(60)
-
-
-async def main() -> None:
-    if not settings.TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
-    
-    # Инициализируем БД (создаём таблицы, если их ещё нет)
-    db.init_db()
-    
-    from aiohttp import web
-    from .yookassa_webhook_runner import create_app
-    from aiogram.client.default import DefaultBotProperties
-
-    bot = Bot(
-        token=settings.TELEGRAM_BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-
-    dp = Dispatcher()
-    dp.include_router(router)
-
-    await set_bot_commands(bot)
-
-    # запускаем фоновые воркеры
-    asyncio.create_task(auto_deactivate_expired_subscriptions())
-    asyncio.create_task(auto_notify_expiring_subscriptions(bot))
-
-    app = create_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
-    await site.start()
-
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+                e
