@@ -491,7 +491,29 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
-
+# Клавиатура для напоминаний / окончания подписки
+SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔁 Продлить подписку",
+                callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="💰 Продлить криптой",
+                callback_data="heleket:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📃 Тарифы",
+                callback_data="subscription:open",
+            ),
+        ],
+    ]
+)
 
 START_TEXT = (
     "MaxNet VPN | Сервис защищённого подключения\n\n"
@@ -829,6 +851,13 @@ async def cmd_subscription(message: Message) -> None:
         text,
         disable_web_page_preview=True,
     )
+
+
+@router.callback_query(F.data == "subscription:open")
+async def subscription_open_callback(callback: CallbackQuery) -> None:
+    # просто переиспользуем уже готовый хендлер
+    await cmd_subscription(callback.message)
+    await callback.answer()
 
 
 @router.message(Command("promo_code"))
@@ -3542,13 +3571,28 @@ async def set_bot_commands(bot: Bot) -> None:
     ]
     await bot.set_my_commands(commands)
 
+
 async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
     """
     Периодически проверяет подписки, срок которых скоро истекает,
     и отправляет напоминания пользователям (за 3 дня и за 1 день).
+
+    Дополнительно:
+    - не шлём уведомления ночью (по UTC: только 09–22);
+    - добавляем inline-клавиатуру SUBSCRIPTION_RENEW_KEYBOARD.
     """
     while True:
         try:
+            now = datetime.utcnow()
+            # Опциональное правило "не слать ночью"
+            if not (9 <= now.hour <= 22):
+                log.debug(
+                    "[AutoNotify] Skip notifications at this hour (utc_hour=%s)",
+                    now.hour,
+                )
+                await asyncio.sleep(600)
+                continue
+
             # --- Напоминание за 3 дня до окончания ---
             subs_3d = db.get_subscriptions_expiring_in_window(72, 73)
             for sub in subs_3d:
@@ -3565,13 +3609,14 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     await bot.send_message(
                         chat_id=telegram_user_id,
                         text=(
-                            "🔔 Напоминание: твоя VPN-подписка MaxNet VPN истекает примерно через 3 дня.\n\n"
-                            "Чтобы не потерять доступ, продли подписку заранее:\n"
-                            "• команда /buy — оплата картой (ЮKassa)\n"
-                            "• команда /buy_crypto — оплата криптой (Heleket)\n\n"
-                            "Также ты можешь использовать реферальную программу и промокоды, "
-                            "чтобы снизить стоимость продления."
+                            "⏳ Срок действия VPN скоро закончится\n\n"
+                            "До окончания подписки осталось 3 дня.\n\n"
+                            "Ты можешь продлить доступ:\n"
+                            "• оплатив картой или криптой;\n"
+                            "• используя баллы (если хватает).\n\n"
+                            "Нажми «Продлить подписку», чтобы выбрать вариант 👇"
                         ),
+                        reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
 
@@ -3627,13 +3672,14 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     await bot.send_message(
                         chat_id=telegram_user_id,
                         text=(
-                            "⏰ Важно: твоя VPN-подписка MaxNet VPN истекает примерно через 1 день.\n\n"
-                            "Чтобы подключение не оборвалось, продли подписку прямо сейчас:\n"
-                            "• /buy — оплата картой (ЮKassa)\n"
-                            "• /buy_crypto — оплата криптовалютой (Heleket)\n\n"
-                            "Если у тебя есть промокод или баллы по реферальной программе, "
-                            "самое время ими воспользоваться 🙂"
+                            "⚠️ VPN доступ скоро закончится\n\n"
+                            "Подписка истекает через 24 часа.\n\n"
+                            "Чтобы не потерять доступ к интернету:\n"
+                            "• продли подписку заранее;\n"
+                            "• выбери удобный способ оплаты.\n\n"
+                            "Нажми кнопку ниже 👇"
                         ),
+                        reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
 
