@@ -3595,6 +3595,24 @@ async def cmd_admin_deactivate(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+    # уведомляем пользователя о ручной деактивации
+    if telegram_user_id:
+        try:
+            await send_text_message(
+                telegram_user_id=telegram_user_id,
+                text=(
+                    "⛔️ Доступ к MaxNet VPN был отключён администратором.\n\n"
+                    "Если это произошло по ошибке — напиши в поддержку."
+                ),
+            )
+        except Exception as e:
+            log.error(
+                "[AdminDeactivate] Failed to notify user %s: %r",
+                telegram_user_id,
+                e,
+            )
+
+
 
 @router.message(Command("admin_activate"))
 async def cmd_admin_activate(message: Message) -> None:
@@ -4462,6 +4480,10 @@ async def auto_deactivate_expired_subscriptions() -> None:
 
                 if not deactivated:
                     continue
+                
+                # защита от повторной обработки
+                if db.has_subscription_notification(sub_id, "expired"):
+                    continue
 
                 telegram_user_id = deactivated.get("telegram_user_id")
 
@@ -4546,10 +4568,6 @@ async def main() -> None:
     await site.start()
 
     await dp.start_polling(bot)
-
-
-
-
 
 
 if __name__ == "__main__":
