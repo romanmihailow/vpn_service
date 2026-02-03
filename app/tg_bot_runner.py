@@ -1672,6 +1672,12 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("points:tariff:"))
 async def points_tariff_callback(callback: CallbackQuery) -> None:
     data = callback.data or ""
+    log.info(
+        "[PointsPay] Received callback: data=%r from_user_id=%s",
+        data,
+        callback.from_user.id if callback.from_user else None,
+    )
+
     parts = data.split(":")
     if len(parts) != 3:
         await callback.answer("Некорректные данные кнопки.", show_alert=True)
@@ -1681,6 +1687,11 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
     tariff = TARIFFS_POINTS.get(tariff_code)
 
     if tariff is None:
+        log.warning(
+            "[PointsPay] Unknown tariff code %r in callback data=%r",
+            tariff_code,
+            data,
+        )
         await callback.answer("Неизвестный тариф.", show_alert=True)
         return
 
@@ -1696,26 +1707,52 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
     try:
         points_cost_int = int(points_cost)
     except (TypeError, ValueError):
+        log.error(
+            "[PointsPay] Bad points_cost=%r for tariff_code=%s",
+            points_cost,
+            tariff_code,
+        )
         await callback.answer("Некорректная цена тарифа в баллах.", show_alert=True)
         return
 
     try:
         duration_int = int(duration_days)
     except (TypeError, ValueError):
+        log.warning(
+            "[PointsPay] Bad duration_days=%r for tariff_code=%s, fallback 30",
+            duration_days,
+            tariff_code,
+        )
         duration_int = 30
+
+    # Мини-уведомление, чтобы пользователь видел, что что-то происходит
+    try:
+        await callback.answer("Проверяю баланс и оформляю подписку…")
+    except Exception as e:
+        log.warning(
+            "[PointsPay] Failed to answer callback briefly for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
 
     # Проверяем баланс
     try:
         balance = db.get_user_points_balance(telegram_user_id=telegram_user_id)
+        log.info(
+            "[PointsPay] Balance check: tg_id=%s balance=%s need=%s",
+            telegram_user_id,
+            balance,
+            points_cost_int,
+        )
     except Exception as e:
         log.error(
             "[PointsPay] Failed to get balance for tg_id=%s: %r",
             telegram_user_id,
             e,
         )
-        await callback.answer(
-            "Не удалось получить баланс баллов. Попробуй позже.",
-            show_alert=True,
+        await callback.message.answer(
+            "❌ Не удалось получить баланс баллов. Попробуй позже или напиши в поддержку.",
+            disable_web_page_preview=True,
         )
         return
 
@@ -1732,6 +1769,11 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
     try:
         latest_sub = db.get_latest_subscription_for_telegram(
             telegram_user_id=telegram_user_id,
+        )
+        log.info(
+            "[PointsPay] Latest subscription for tg_id=%s: %r",
+            telegram_user_id,
+            latest_sub,
         )
     except Exception as e:
         log.error(
@@ -1770,7 +1812,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             telegram_user_id=telegram_user_id,
         )
 
-        # ВАЖНО: теперь продлеваем от base_expires_at, а не от "сейчас"
+        # ВАЖНО: продлеваем от base_expires_at, а не от "сейчас"
         expires_at = base_expires_at + timedelta(days=duration_int)
 
         sub_id = db.insert_subscription(
@@ -1787,6 +1829,14 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             wg_public_key=client_pub,
             expires_at=expires_at,
             event_name=f"points_payment_{tariff_code}",
+        )
+
+        log.info(
+            "[PointsPay] Subscription created from points: sub_id=%s tg_id=%s ip=%s expires_at=%s",
+            sub_id,
+            telegram_user_id,
+            client_ip,
+            expires_at,
         )
 
         meta = {
@@ -1813,7 +1863,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                 add_res,
             )
             await callback.message.answer(
-                "Подписка создана, но не удалось списать баллы. "
+                "Подписка создана, но не удалось корректно списать баллы. "
                 "Свяжись с поддержкой, чтобы уточнить баланс.",
                 disable_web_page_preview=True,
             )
@@ -1853,8 +1903,6 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             disable_web_page_preview=True,
         )
 
-        await callback.answer()
-
     except Exception as e:
         log.error(
             "[PointsPay] Failed to create subscription for tg_id=%s tariff=%s: %r",
@@ -1862,10 +1910,19 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             tariff_code,
             e,
         )
-        await callback.answer(
-            "Произошла ошибка при оформлении подписки за баллы. Попробуй позже.",
-            show_alert=True,
+        await callback.message.answer(
+            "❌ Произошла ошибка при оформлении подписки за баллы. "
+            "Попробуй позже или напиши в поддержку.",
+            disable_web_page_preview=True,
         )
+        try:
+            await callback.answer(
+                "Ошибка при оформлении подписки за баллы.",
+                show_alert=True,
+            )
+        except Exception:
+            # если второй answer упадёт — просто игнорируем
+            pass
         return
 
 
