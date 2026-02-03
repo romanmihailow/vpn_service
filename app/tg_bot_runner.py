@@ -417,6 +417,60 @@ def load_heleket_tariffs_from_db() -> Dict[str, Dict[str, str]]:
     return tariffs
 
 
+def load_points_tariffs_from_db() -> Dict[str, Dict[str, object]]:
+    """
+    Загружает тарифы для оплаты баллами из БД и возвращает dict вида:
+    {
+        "1m": {
+            "label": "1 месяц — 100 баллов",
+            "points_cost": 100,
+            "duration_days": 30,
+        },
+        ...
+    }
+    Берём данные из таблицы tariffs (поле points_cost).
+    """
+    tariffs: Dict[str, Dict[str, object]] = {}
+
+    try:
+        rows = db.get_active_tariffs()
+    except Exception as e:
+        log.error(
+            "[Tariffs] Failed to load points tariffs from DB: %r",
+            e,
+        )
+        return tariffs  # без fallback, цены для баллов задаёшь в БД
+
+    for row in rows:
+        code = row.get("code")
+        title = row.get("title")
+        duration_days = row.get("duration_days")
+        points_cost = row.get("points_cost")
+
+        if not code or title is None or points_cost is None:
+            continue
+
+        try:
+            points_int = int(points_cost)
+        except (TypeError, ValueError):
+            continue
+
+        try:
+            duration_int = int(duration_days)
+        except (TypeError, ValueError):
+            duration_int = 30
+
+        label = f"{title} — {points_int} баллов"
+
+        tariffs[code] = {
+            "label": label,
+            "points_cost": points_int,
+            "duration_days": duration_int,
+        }
+
+    return tariffs
+
+
 def build_tariff_keyboard_from_dict(
     tariffs: Dict[str, Dict[str, str]],
     prefix: str,
@@ -460,10 +514,13 @@ HELEKET_TARIFF_KEYBOARD = build_tariff_keyboard_from_dict(
     prefix="heleket",
 )
 
+# Тарифы и клавиатура для оплаты баллами
+TARIFFS_POINTS = load_points_tariffs_from_db()
 
-
-
-
+POINTS_TARIFF_KEYBOARD = build_tariff_keyboard_from_dict(
+    tariffs=TARIFFS_POINTS,
+    prefix="points",
+)
 
 
 # Кнопки оплаты и промокода (без Tribute, Heleket и демо-запроса)
@@ -473,6 +530,12 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
             InlineKeyboardButton(
                 text="🔐 Подключить VPN",
                 callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎮 Оплатить баллами",
+                callback_data="points:open",
             ),
         ],
         [
@@ -510,6 +573,12 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
             InlineKeyboardButton(
                 text="🔁 Продлить подписку",
                 callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎮 Продлить баллами",
+                callback_data="points:open",
             ),
         ],
         [
@@ -906,6 +975,15 @@ async def cmd_buy(message: Message) -> None:
     )
 
 
+@router.message(Command("buy_points"))
+async def cmd_buy_points(message: Message) -> None:
+    await message.answer(
+        "Выбери тариф для оплаты баллами (игровой баланс):",
+        reply_markup=POINTS_TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+
+
 @router.message(Command("buy_crypto"))
 async def cmd_buy_crypto(message: Message) -> None:
     await message.answer(
@@ -922,6 +1000,17 @@ async def pay_open_callback(callback: CallbackQuery) -> None:
         disable_web_page_preview=True,
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "points:open")
+async def points_open_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Выбери тариф для оплаты баллами (игровой баланс):",
+        reply_markup=POINTS_TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
 
 @router.callback_query(F.data == "heleket:open")
 async def heleket_open_callback(callback: CallbackQuery) -> None:
@@ -1578,6 +1667,187 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
     )
 
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("points:tariff:"))
+async def points_tariff_callback(callback: CallbackQuery) -> None:
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Некорректные данные кнопки.", show_alert=True)
+        return
+
+    _, _, tariff_code = parts
+    tariff = TARIFFS_POINTS.get(tariff_code)
+
+    if tariff is None:
+        await callback.answer("Неизвестный тариф.", show_alert=True)
+        return
+
+    if callback.from_user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = callback.from_user.id
+
+    points_cost = tariff.get("points_cost")
+    duration_days = tariff.get("duration_days")
+
+    try:
+        points_cost_int = int(points_cost)
+    except (TypeError, ValueError):
+        await callback.answer("Некорректная цена тарифа в баллах.", show_alert=True)
+        return
+
+    try:
+        duration_int = int(duration_days)
+    except (TypeError, ValueError):
+        duration_int = 30
+
+    # Проверяем баланс
+    try:
+        balance = db.get_user_points_balance(telegram_user_id=telegram_user_id)
+    except Exception as e:
+        log.error(
+            "[PointsPay] Failed to get balance for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await callback.answer(
+            "Не удалось получить баланс баллов. Попробуй позже.",
+            show_alert=True,
+        )
+        return
+
+    if balance < points_cost_int:
+        await callback.answer(
+            f"Недостаточно баллов: нужно {points_cost_int}, у тебя {balance}.",
+            show_alert=True,
+        )
+        return
+
+    # Выдаём подписку за баллы
+    try:
+        # на всякий случай убираем старые активные подписки
+        deactivate_existing_active_subscriptions(
+            telegram_user_id=telegram_user_id,
+            reason="auto_replace_points_payment",
+        )
+
+        client_priv, client_pub = wg.generate_keypair()
+        client_ip = wg.generate_client_ip()
+        allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+
+        log.info(
+            "[PointsPay] Add peer (points) pubkey=%s ip=%s for tg_id=%s",
+            client_pub,
+            allowed_ip,
+            telegram_user_id,
+        )
+        wg.add_peer(
+            public_key=client_pub,
+            allowed_ip=allowed_ip,
+            telegram_user_id=telegram_user_id,
+        )
+
+        expires_at = datetime.utcnow() + timedelta(days=duration_int)
+
+        sub_id = db.insert_subscription(
+            tribute_user_id=0,
+            telegram_user_id=telegram_user_id,
+            telegram_user_name=callback.from_user.username,
+            subscription_id=0,
+            period_id=0,
+            period=f"points_{tariff_code}",
+            channel_id=0,
+            channel_name="Points balance",
+            vpn_ip=client_ip,
+            wg_private_key=client_priv,
+            wg_public_key=client_pub,
+            expires_at=expires_at,
+            event_name=f"points_payment_{tariff_code}",
+        )
+
+        meta = {
+            "tariff_code": tariff_code,
+        }
+
+        add_res = db.add_points(
+            telegram_user_id=telegram_user_id,
+            delta=-points_cost_int,
+            reason="pay_tariff_points",
+            source="points",
+            related_subscription_id=sub_id,
+            related_payment_id=None,
+            level=None,
+            meta=meta,
+            allow_negative=False,
+        )
+
+        if not add_res.get("ok"):
+            log.error(
+                "[PointsPay] Failed to charge points for tg_id=%s sub_id=%s: %r",
+                telegram_user_id,
+                sub_id,
+                add_res,
+            )
+            # здесь можно решить, что делать; пока просто сообщим об ошибке
+            await callback.message.answer(
+                "Подписка создана, но не удалось списать баллы. "
+                "Свяжись с поддержкой, чтобы уточнить баланс.",
+                disable_web_page_preview=True,
+            )
+        else:
+            log.info(
+                "[PointsPay] Points charged: tg_id=%s sub_id=%s cost=%s new_balance=%s",
+                telegram_user_id,
+                sub_id,
+                points_cost_int,
+                add_res.get("balance"),
+            )
+
+        config_text = wg.build_client_config(
+            client_private_key=client_priv,
+            client_ip=client_ip,
+        )
+
+        await send_vpn_config_to_user(
+            telegram_user_id=telegram_user_id,
+            config_text=config_text,
+            caption=(
+                "Подписка MaxNet VPN оплачена баллами.\n\n"
+                "Ниже — конфиг WireGuard и QR для подключения."
+            ),
+        )
+
+        if isinstance(expires_at, datetime):
+            expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        else:
+            expires_str = str(expires_at)
+
+        await callback.message.answer(
+            "✅ Подписка успешно оформлена за баллы.\n\n"
+            f"Списано: <b>{points_cost_int}</b> баллов.\n"
+            f"Срок действия до: <b>{expires_str}</b>",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+
+        await callback.answer()
+
+    except Exception as e:
+        log.error(
+            "[PointsPay] Failed to create subscription for tg_id=%s tariff=%s: %r",
+            telegram_user_id,
+            tariff_code,
+            e,
+        )
+        await callback.answer(
+            "Произошла ошибка при оформлении подписки за баллы. Попробуй позже.",
+            show_alert=True,
+        )
+        return
+
 
 @router.callback_query(F.data.startswith("heleket:tariff:"))
 async def heleket_tariff_callback(callback: CallbackQuery) -> None:
@@ -3724,6 +3994,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="subscription", description="Тарифы и стоимость подписки"),
         BotCommand(command="promo_code", description="Применить промокод"),
         BotCommand(command="buy", description="Оплатить подписку картой (ЮKassa)"),
+        BotCommand(command="buy_points", description="Оплатить подписку баллами"),
         BotCommand(command="buy_crypto", description="Оплатить подписку криптой (Heleket)"),
         BotCommand(command="demo", description="Запросить демо-доступ"),
         BotCommand(command="support", description="Связаться с поддержкой"),
@@ -3731,6 +4002,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="terms", description="Пользовательское соглашение"),
     ]
     await bot.set_my_commands(commands)
+
 
 
 async def auto_notify_expiring_subscriptions(bot: Bot) -> None:

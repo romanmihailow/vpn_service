@@ -663,6 +663,227 @@ def get_latest_subscription_for_telegram(
             return dict(row)
         
 
+def pay_subscription_with_points(
+    telegram_user_id: int,
+    tariff_code: str,
+) -> Dict[str, Any]:
+    """
+    Оплачивает продление текущей активной подписки пользователя бонусными баллами.
+
+    Логика:
+    - находит тариф по коду с points_cost и duration_days;
+    - проверяет, что есть активная подписка;
+    - проверяет, что у пользователя хватает баллов;
+    - списывает баллы и пишет запись в user_points и user_points_transactions;
+    - продлевает expires_at у подписки.
+
+    Возвращает dict:
+        {
+            "ok": True/False,
+            "error": ... или None,
+            "error_message": ... или None,
+            "subscription_id": ...,
+            "tariff_code": ...,
+            "points_cost": ...,
+            "duration_days": ...,
+            "new_expires_at": <datetime или None>,
+            "new_balance": <int или None>,
+        }
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "error_message": None,
+        "subscription_id": None,
+        "tariff_code": tariff_code,
+        "points_cost": None,
+        "duration_days": None,
+        "new_expires_at": None,
+        "new_balance": None,
+    }
+
+    normalized_code = (tariff_code or "").strip()
+    if not normalized_code:
+        result["error"] = "empty_tariff_code"
+        result["error_message"] = "Код тарифа не задан."
+        return result
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                # 1) Ищем тариф по коду, который можно оплатить баллами
+                sql_tariff = """
+                SELECT
+                    code,
+                    title,
+                    duration_days,
+                    points_cost
+                FROM tariffs
+                WHERE code = %s
+                  AND is_active = TRUE
+                  AND points_cost IS NOT NULL
+                LIMIT 1;
+                """
+                cur.execute(sql_tariff, (normalized_code,))
+                tariff_row = cur.fetchone()
+                if tariff_row is None:
+                    result["error"] = "tariff_not_found_or_inactive"
+                    result["error_message"] = "Тариф не найден или недоступен для оплаты баллами."
+                    return result
+
+                points_cost_raw = tariff_row.get("points_cost")
+                duration_days_raw = tariff_row.get("duration_days")
+
+                try:
+                    points_cost_int = int(points_cost_raw)
+                except (TypeError, ValueError):
+                    points_cost_int = 0
+
+                try:
+                    duration_days_int = int(duration_days_raw)
+                except (TypeError, ValueError):
+                    duration_days_int = 0
+
+                if points_cost_int <= 0 or duration_days_int <= 0:
+                    result["error"] = "invalid_tariff_points_or_duration"
+                    result["error_message"] = "Для этого тарифа не задана корректная цена в баллах или длительность."
+                    return result
+
+                result["points_cost"] = points_cost_int
+                result["duration_days"] = duration_days_int
+
+                # 2) Ищем последнюю активную подписку пользователя и блокируем её строку
+                sql_sub = """
+                SELECT *
+                FROM vpn_subscriptions
+                WHERE telegram_user_id = %s
+                  AND active = TRUE
+                  AND expires_at > NOW()
+                ORDER BY expires_at DESC, id DESC
+                LIMIT 1
+                FOR UPDATE;
+                """
+                cur.execute(sql_sub, (telegram_user_id,))
+                sub_row = cur.fetchone()
+                if sub_row is None:
+                    result["error"] = "no_active_subscription"
+                    result["error_message"] = "У тебя нет активной подписки, которую можно продлить баллами."
+                    return result
+
+                sub_id = sub_row["id"]
+                result["subscription_id"] = sub_id
+
+                # 3) Получаем и блокируем баланс поинтов пользователя
+                sql_points_select = """
+                SELECT balance
+                FROM user_points
+                WHERE telegram_user_id = %s
+                FOR UPDATE;
+                """
+                cur.execute(sql_points_select, (telegram_user_id,))
+                points_row = cur.fetchone()
+                if points_row is None or points_row.get("balance") is None:
+                    current_balance = 0
+                else:
+                    try:
+                        current_balance = int(points_row["balance"])
+                    except (TypeError, ValueError):
+                        current_balance = 0
+
+                if current_balance < points_cost_int:
+                    result["error"] = "insufficient_points"
+                    result["error_message"] = "Недостаточно баллов для продления подписки."
+                    result["new_balance"] = current_balance
+                    return result
+
+                new_balance = current_balance - points_cost_int
+
+                # 4) Обновляем баланс в user_points (UPSERT)
+                sql_points_upsert = """
+                INSERT INTO user_points (telegram_user_id, balance, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (telegram_user_id) DO UPDATE
+                SET balance = EXCLUDED.balance,
+                    updated_at = NOW()
+                RETURNING balance;
+                """
+                cur.execute(sql_points_upsert, (telegram_user_id, new_balance))
+                balance_row = cur.fetchone()
+                if balance_row is None:
+                    raise RuntimeError("Failed to update user_points balance")
+
+                try:
+                    final_balance = int(balance_row["balance"])
+                except (TypeError, ValueError):
+                    final_balance = new_balance
+
+                result["new_balance"] = final_balance
+
+                # 5) Пишем транзакцию по поинтам
+                sql_insert_tx = """
+                INSERT INTO user_points_transactions (
+                    telegram_user_id,
+                    delta,
+                    reason,
+                    source,
+                    related_subscription_id,
+                    related_payment_id,
+                    level,
+                    meta
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """
+                meta: Dict[str, Any] = {
+                    "tariff_code": normalized_code,
+                    "duration_days": duration_days_int,
+                    "points_cost": points_cost_int,
+                }
+                meta_json = psycopg2.extras.Json(meta)
+
+                cur.execute(
+                    sql_insert_tx,
+                    (
+                        telegram_user_id,
+                        -points_cost_int,
+                        "subscription_extend",
+                        "points",
+                        sub_id,
+                        None,
+                        None,
+                        meta_json,
+                    ),
+                )
+
+                # 6) Продлеваем подписку
+                sql_update_sub = """
+                UPDATE vpn_subscriptions
+                SET expires_at = GREATEST(expires_at, NOW()) + (%s || ' days')::interval,
+                    last_event_name = %s
+                WHERE id = %s
+                RETURNING expires_at;
+                """
+                last_event_name = f"points_extend_{normalized_code}"
+                cur.execute(sql_update_sub, (duration_days_int, last_event_name, sub_id))
+                updated_sub = cur.fetchone()
+                if updated_sub is None:
+                    raise RuntimeError("Failed to update subscription expiration")
+
+                new_expires_at = updated_sub["expires_at"]
+                result["new_expires_at"] = new_expires_at
+
+            conn.commit()
+
+            result["ok"] = True
+            return result
+
+        except Exception as e:
+            conn.rollback()
+            result["error"] = result["error"] or "db_error"
+            if result.get("error_message") is None:
+                result["error_message"] = f"Ошибка при оплате подписки баллами: {e!r}"
+            return result
+
+
 def get_active_subscriptions_for_telegram(
     telegram_user_id: int,
 ) -> List[Dict[str, Any]]:
@@ -1410,6 +1631,30 @@ def get_tariffs_for_heleket() -> List[Dict[str, Any]]:
             return rows
 
 
+def get_tariffs_for_points() -> List[Dict[str, Any]]:
+    """
+    Возвращает список активных тарифов, у которых задана цена в бонусных баллах.
+    Используется для построения кнопок оплаты подписки баллами.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        points_cost,
+        sort_order
+    FROM tariffs
+    WHERE is_active = TRUE
+      AND points_cost IS NOT NULL
+    ORDER BY sort_order ASC, id ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return rows
+
+
 def get_yookassa_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
     """
     Возвращает один тариф по code для оплаты ЮKassa.
@@ -1449,6 +1694,31 @@ def get_heleket_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
     WHERE code = %s
       AND is_active = TRUE
       AND heleket_amount IS NOT NULL
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (code,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return row
+
+
+def get_points_tariff_by_code(code: str) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает один тариф по code для оплаты бонусными баллами.
+    """
+    sql = """
+    SELECT
+        code,
+        title,
+        duration_days,
+        points_cost
+    FROM tariffs
+    WHERE code = %s
+      AND is_active = TRUE
+      AND points_cost IS NOT NULL
     LIMIT 1;
     """
     with get_conn() as conn:
