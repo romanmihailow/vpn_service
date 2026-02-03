@@ -4304,7 +4304,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                 continue
 
             # --- Напоминание за 3 дня до окончания ---
-            subs_3d = db.get_subscriptions_expiring_in_window(72, 73)
+            subs_3d = db.get_subscriptions_expiring_in_window(60, 73)
             for sub in subs_3d:
                 sub_id = sub.get("id")
                 telegram_user_id = sub.get("telegram_user_id")
@@ -4367,7 +4367,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     )
 
             # --- Напоминание за 1 день до окончания ---
-            subs_1d = db.get_subscriptions_expiring_in_window(24, 25)
+            subs_1d = db.get_subscriptions_expiring_in_window(12, 25)
             for sub in subs_1d:
                 sub_id = sub.get("id")
                 telegram_user_id = sub.get("telegram_user_id")
