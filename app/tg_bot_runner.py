@@ -491,6 +491,18 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
+REF_SHARE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🤝 Пригласить друга",
+                callback_data="ref:open_from_ref",
+            ),
+        ],
+    ]
+)
+
+
 # Клавиатура для напоминаний / окончания подписки
 SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -856,6 +868,7 @@ async def cmd_subscription(message: Message) -> None:
     await message.answer(
         text,
         disable_web_page_preview=True,
+        reply_markup=REF_SHARE_KEYBOARD,
     )
 
 
@@ -1662,7 +1675,9 @@ async def cmd_status(message: Message) -> None:
         text,
         parse_mode="HTML",
         disable_web_page_preview=True,
+        reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
     )
+
 
 @router.message(Command("ref"))
 async def cmd_ref(message: Message) -> None:
@@ -1758,6 +1773,72 @@ async def cmd_ref(message: Message) -> None:
         disable_web_page_preview=True,
     )
 
+
+@router.callback_query(F.data == "ref:open_from_ref")
+async def ref_open_from_ref_callback(callback: CallbackQuery) -> None:
+    """
+    Кнопка «Пригласить друга» под /ref.
+    Отправляет пользователю короткое сообщение, которое удобно переслать другу.
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = user.id
+    username = user.username
+
+    try:
+        info = db.get_or_create_referral_info(
+            telegram_user_id=telegram_user_id,
+            telegram_username=username,
+        )
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get referral info (callback) for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await callback.answer("Не удалось получить реферальную ссылку.", show_alert=True)
+        return
+
+    ref_code = info.get("ref_code")
+
+    try:
+        me = await callback.bot.get_me()
+        bot_username = me.username
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get bot username (callback) for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        bot_username = None
+
+    if bot_username and ref_code:
+        deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+    elif ref_code:
+        deep_link = f"/start {ref_code}"
+    else:
+        deep_link = None
+
+    if not deep_link:
+        await callback.answer("Не удалось собрать ссылку.", show_alert=True)
+        return
+
+    share_text = (
+        "Привет! Я пользуюсь MaxNet VPN — удобный VPN на WireGuard.\n\n"
+        "Вот моя реферальная ссылка, по ней тебе выдадут пробный доступ, "
+        "а мне начислят бонусные дни за оплату:\n"
+        f"{deep_link}"
+    )
+
+    await callback.message.answer(
+        share_text,
+        disable_web_page_preview=True,
+    )
+
+    await callback.answer("Скопируй или перешли это сообщение другу 🙂")
 
 
 @router.callback_query(F.data == "ref:open_from_notify")
