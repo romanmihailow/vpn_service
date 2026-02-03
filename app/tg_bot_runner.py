@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
+from collections import defaultdict
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
 from aiogram.types import (
@@ -2362,10 +2363,44 @@ async def cmd_ref_info(message: Message) -> None:
     )
 
 
+def _humanize_points_reason(reason: str, source: str, level: Optional[int]) -> str:
+    """
+    Преобразует внутренние reason/source в человекочитаемый текст.
+    """
+    if reason == "pay_tariff_points":
+        return "оплата подписки"
+
+    if reason.startswith("ref_level_"):
+        if level is not None:
+            return f"реферал (уровень {level})"
+        return "реферальный бонус"
+
+    if reason in ("manual_test_bonus", "ref_level_1_manual_fix"):
+        return "бонус от администрации"
+
+    if source in ("manual", "manual_fix"):
+        return "бонус от администрации"
+
+    return reason
+
+
 @router.message(Command("points"))
 async def cmd_points(message: Message) -> None:
     """
-    Показывает текущий баланс поинтов и последние операции.
+    Показывает текущий баланс поинтов и последние операции
+    в формате:
+    🎮 Твои игровые баллы
+
+    💰 Баланс: <b>XXX</b>
+
+    Сегодня:
+    🔴 −600 — оплата подписки
+    🟢 +6 — реферал (3 уровень)
+
+    Ранее:
+    🎁 +1000 — бонус от администрации
+
+    ℹ️ Баллы можно тратить на оплату подписки.
     """
 
     user = message.from_user
@@ -2398,33 +2433,105 @@ async def cmd_points(message: Message) -> None:
 
     lines: List[str] = []
     lines.append("🎮 <b>Твои игровые баллы</b>\n")
-    lines.append(f"Текущий баланс: <b>{balance}</b> баллов.\n")
+    lines.append(f"💰 Баланс: <b>{balance}</b> баллов.\n")
 
+    # Если операций нет — показываем простой текст + подсказку
     if not transactions:
         lines.append("Пока у тебя нет операций по баллам.")
+        lines.append("")
+        lines.append("ℹ️ Баллы можно тратить на оплату подписки.")
+        text = "\n".join(lines)
+        await message.answer(
+            text,
+            disable_web_page_preview=True,
+        )
+        return
+
+    now_utc = datetime.utcnow()
+
+    # Группируем операции: отдельно "Сегодня" и "Ранее",
+    # внутри — по типу (оплата подписки / реферал / бонус и т.д.)
+    today_groups: Dict[tuple, int] = defaultdict(int)
+    earlier_groups: Dict[tuple, int] = defaultdict(int)
+
+    for tx in transactions:
+        delta_raw = tx.get("delta") or 0
+        reason = tx.get("reason") or "-"
+        source = tx.get("source") or "-"
+        created_at = tx.get("created_at")
+        level = tx.get("level")
+
+        # Человекочитаемое название причины
+        label = _humanize_points_reason(
+            reason=reason,
+            source=source,
+            level=level,
+        )
+
+        # Аккуратно приводим delta к int
+        if isinstance(delta_raw, (int, float)):
+            delta = int(delta_raw)
+        else:
+            try:
+                delta = int(delta_raw)
+            except Exception:
+                delta = 0
+
+        # Определяем, относится ли операция к "Сегодня"
+        is_today = False
+        if isinstance(created_at, datetime):
+            if created_at.tzinfo is not None:
+                created_dt = created_at.astimezone(timezone.utc)
+            else:
+                created_dt = created_at.replace(tzinfo=timezone.utc)
+            is_today = (created_dt.date() == now_utc.date())
+
+        group_key = (label, "income" if delta >= 0 else "spend")
+
+        if is_today:
+            today_groups[group_key] += delta
+        else:
+            earlier_groups[group_key] += delta
+
+    # Блок "Сегодня"
+    lines.append("Сегодня:")
+
+    if not today_groups:
+        lines.append("• нет операций за сегодня")
     else:
-        lines.append("Последние операции:\n")
-        for tx in transactions:
-            delta = tx.get("delta") or 0
-            reason = tx.get("reason") or "-"
-            source = tx.get("source") or "-"
-            created_at = tx.get("created_at")
-            level = tx.get("level")
-
-            if isinstance(created_at, datetime):
-                created_str = created_at.strftime("%Y-%m-%d %H:%M")
+        for (label, _kind), total in today_groups.items():
+            if total > 0:
+                emoji = "🟢"
+                amount_str = f"+{total}"
+            elif total < 0:
+                emoji = "🔴"
+                amount_str = str(total)
             else:
-                created_str = str(created_at)
+                emoji = "⚪"
+                amount_str = str(total)
+            lines.append(f"{emoji} {amount_str} — {label}")
 
-            sign = "+" if delta >= 0 else ""
-            if level is not None:
-                reason_display = f"{reason} (уровень {level})"
+    # Пустая строка между блоками
+    lines.append("")
+    lines.append("Ранее:")
+
+    if not earlier_groups:
+        lines.append("• нет более ранних операций")
+    else:
+        for (label, _kind), total in earlier_groups.items():
+            if total > 0:
+                emoji = "🟢"
+                amount_str = f"+{total}"
+            elif total < 0:
+                emoji = "🔴"
+                amount_str = str(total)
             else:
-                reason_display = reason
+                emoji = "⚪"
+                amount_str = str(total)
+            lines.append(f"{emoji} {amount_str} — {label}")
 
-            lines.append(
-                f"• {created_str}: <b>{sign}{delta}</b> — {reason_display} [{source}]"
-            )
+    lines.append("")
+    lines.append("ℹ️ Баллы можно тратить на оплату подписки.")
 
     text = "\n".join(lines)
 
