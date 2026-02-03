@@ -546,12 +546,19 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
+                text="💸 Вывести",
+                callback_data="withdraw:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="🌐 Открыть сайт",
                 url="https://maxnetvpn.ru",
             ),
         ],
     ]
 )
+
 
 
 REF_SHARE_KEYBOARD = InlineKeyboardMarkup(
@@ -997,6 +1004,15 @@ async def pay_open_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Выбери тариф для оплаты через банковскую карту (ЮKassa):",
         reply_markup=TARIFF_KEYBOARD,
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+    
+    
+@router.callback_query(F.data == "withdraw:open")
+async def withdraw_open_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Данный раздел находится в разработке.",
         disable_web_page_preview=True,
     )
     await callback.answer()
