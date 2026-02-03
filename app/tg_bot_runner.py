@@ -3779,8 +3779,9 @@ async def main() -> None:
 
     await set_bot_commands(bot)
 
-    # запускаем фоновый воркер авто-деактивации
+    # запускаем фоновые воркеры
     asyncio.create_task(auto_deactivate_expired_subscriptions())
+    asyncio.create_task(auto_notify_expiring_subscriptions(bot))
 
     app = create_app()
     runner = web.AppRunner(app)
