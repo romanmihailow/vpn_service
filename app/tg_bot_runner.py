@@ -546,7 +546,7 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
-                text="💸 Вывести",
+                text="💳 Вывести",
                 callback_data="withdraw:open",
             ),
         ],
