@@ -512,6 +512,12 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
                 callback_data="subscription:open",
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="🤝 Пригласить друга",
+                callback_data="ref:open_from_notify",
+            ),
+        ],
     ]
 )
 
@@ -1751,6 +1757,78 @@ async def cmd_ref(message: Message) -> None:
         text,
         disable_web_page_preview=True,
     )
+
+
+
+@router.callback_query(F.data == "ref:open_from_notify")
+async def ref_open_from_notify(callback: CallbackQuery) -> None:
+    """
+    Короткий вариант реферального сообщения по кнопке
+    «🤝 Пригласить друга» под уведомлениями.
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = user.id
+    username = user.username
+
+    try:
+        info = db.get_or_create_referral_info(
+            telegram_user_id=telegram_user_id,
+            telegram_username=username,
+        )
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get referral info (notify) for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await callback.answer("Ошибка, попробуй позже.", show_alert=True)
+        return
+
+    ref_code = info.get("ref_code")
+
+    # Пытаемся получить username бота, чтобы собрать ссылку
+    try:
+        me = await callback.bot.get_me()
+        bot_username = me.username
+    except Exception as e:
+        log.error(
+            "[Referral] Failed to get bot username (notify) for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        bot_username = None
+
+    if bot_username and ref_code:
+        deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+    elif ref_code:
+        deep_link = f"/start {ref_code}"
+    else:
+        deep_link = None
+
+    if not deep_link:
+        await callback.message.answer(
+            "Не удалось сформировать реферальную ссылку. Попробуй написать /ref или обратись в поддержку.",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    text = (
+        "🤝 Пригласи друга и продли подписку дешевле.\n\n"
+        "Отправь эту ссылку другу. Когда он подключится и оплатит подписку, "
+        "ты получишь баллы по реферальной программе:\n\n"
+        f"<a href=\"{deep_link}\">{deep_link}</a>"
+    )
+
+    await callback.message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
+    await callback.answer("Ссылку можно переслать другу.")
 
 
 @router.message(Command("ref_info"))
