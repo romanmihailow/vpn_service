@@ -1726,6 +1726,26 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
         )
         return
 
+    # Вычисляем базовую дату окончания: либо с текущего момента,
+    # либо от уже оплаченного срока, если он ещё в будущем.
+    base_expires_at = datetime.utcnow()
+    try:
+        latest_sub = db.get_latest_subscription_for_telegram(
+            telegram_user_id=telegram_user_id,
+        )
+    except Exception as e:
+        log.error(
+            "[PointsPay] Failed to get latest subscription for extend tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        latest_sub = None
+
+    if latest_sub:
+        old_expires_at = latest_sub.get("expires_at")
+        if isinstance(old_expires_at, datetime) and old_expires_at > base_expires_at:
+            base_expires_at = old_expires_at
+
     # Выдаём подписку за баллы
     try:
         # на всякий случай убираем старые активные подписки
@@ -1750,15 +1770,16 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             telegram_user_id=telegram_user_id,
         )
 
-        expires_at = datetime.utcnow() + timedelta(days=duration_int)
+        # ВАЖНО: теперь продлеваем от base_expires_at, а не от "сейчас"
+        expires_at = base_expires_at + timedelta(days=duration_int)
 
         sub_id = db.insert_subscription(
             tribute_user_id=0,
             telegram_user_id=telegram_user_id,
             telegram_user_name=callback.from_user.username,
             subscription_id=0,
-            period_id=0,
             period=f"points_{tariff_code}",
+            period_id=0,
             channel_id=0,
             channel_name="Points balance",
             vpn_ip=client_ip,
@@ -1791,7 +1812,6 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                 sub_id,
                 add_res,
             )
-            # здесь можно решить, что делать; пока просто сообщим об ошибке
             await callback.message.answer(
                 "Подписка создана, но не удалось списать баллы. "
                 "Свяжись с поддержкой, чтобы уточнить баланс.",
