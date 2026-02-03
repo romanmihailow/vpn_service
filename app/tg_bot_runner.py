@@ -3730,6 +3730,10 @@ async def auto_deactivate_expired_subscriptions() -> None:
                         await send_subscription_expired_notification(
                             telegram_user_id=telegram_user_id,
                         )
+                        db.create_subscription_notification(  # <-- НОВОЕ
+                            subscription_id=sub_id,           # <-- НОВОЕ
+                            notification_type="expired",      # <-- НОВОЕ
+                        )
                         log.info(
                             "[AutoExpire] Sent expiration notification to tg_id=%s for sub_id=%s",
                             telegram_user_id,
@@ -3742,6 +3746,7 @@ async def auto_deactivate_expired_subscriptions() -> None:
                             sub_id,
                             repr(e),
                         )
+
 
         except Exception as e:
             log.error(
