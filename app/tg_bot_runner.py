@@ -560,7 +560,6 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
-
 REF_SHARE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -2175,31 +2174,39 @@ async def cmd_ref(message: Message) -> None:
         deep_link = None
 
     lines: List[str] = []
+
+    # Заголовок
     lines.append("👥 <b>Твоя реферальная ссылка</b>\n")
 
+    # Код
     if ref_code:
-        lines.append(f"Твой реферальный код: <code>{ref_code}</code>\n")
+        lines.append(f"Код: <code>{ref_code}</code>")
     else:
-        lines.append("Не удалось сгенерировать реферальный код.\n")
+        lines.append("Код: <i>не удалось сгенерировать</i>")
 
+    # Ссылка
     if deep_link:
-        lines.append("Поделись этой ссылкой с друзьями:\n")
-        lines.append(f'<a href="{deep_link}">{deep_link}</a>\n')
+        lines.append(f'Ссылка: <a href="{deep_link}">{deep_link}</a>')
+    else:
+        lines.append("Ссылка: <i>недоступна</i>")
 
-    lines.append("\n<b>Статистика приглашений:</b>")
-    lines.append(f"\n• Всего приглашённых (1-я линия): <b>{invited_count}</b>")
-    lines.append(f"\n• Из них оплатили подписку: <b>{paid_referrals_count}</b>")
+    # Пустая строка
+    lines.append("")
 
-    # Если есть данные по уровням — показываем красиво
-    if invited_by_levels:
-        lines.append("\n\n<b>По уровням (1–5):</b>")
-        for level in sorted(invited_by_levels.keys()):
-            lvl_inv = invited_by_levels.get(level) or 0
-            lvl_paid = paid_by_levels.get(level) or 0
-            lines.append(
-                f"\n• Уровень {level}: приглашённых — <b>{lvl_inv}</b>, "
-                f"оплатили — <b>{lvl_paid}</b>"
-            )
+    # Сводка по первой линии (без дублирования ниже)
+    lines.append("📊 <b>Сводка:</b>")
+    lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
+    lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
+
+    # Пустая строка перед уровнями
+    lines.append("")
+
+    # Блок уровней 2–5 в формате: «приглашено / оплатили»
+    lines.append("Уровни 2–5 (приглашено / оплатили):")
+    for level in range(2, 6):
+        lvl_inv = invited_by_levels.get(level) or 0
+        lvl_paid = paid_by_levels.get(level) or 0
+        lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
 
     text = "\n".join(lines)
 
