@@ -198,6 +198,8 @@ def init_db() -> None:
         ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT;
     ALTER TABLE subscription_notifications
         ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+    ALTER TABLE subscription_notifications
+        ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_notifications_unique
         ON subscription_notifications (subscription_id, notification_type);
