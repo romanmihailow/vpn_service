@@ -4390,11 +4390,17 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
             for sub in subs_3d:
                 sub_id = sub.get("id")
                 telegram_user_id = sub.get("telegram_user_id")
+                expires_at = sub.get("expires_at")
 
                 if not sub_id or not telegram_user_id:
                     continue
 
-                if db.has_subscription_notification(sub_id, "expires_3d"):
+                if db.has_subscription_notification(
+                    sub_id,
+                    "expires_3d",
+                    telegram_user_id=telegram_user_id,
+                    expires_at=expires_at,
+                ):
                     continue
 
                 try:
@@ -4415,6 +4421,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     db.create_subscription_notification(
                         subscription_id=sub_id,
                         notification_type="expires_3d",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
                     )
 
                     log.info(
@@ -4453,11 +4461,17 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
             for sub in subs_1d:
                 sub_id = sub.get("id")
                 telegram_user_id = sub.get("telegram_user_id")
+                expires_at = sub.get("expires_at")
 
                 if not sub_id or not telegram_user_id:
                     continue
 
-                if db.has_subscription_notification(sub_id, "expires_1d"):
+                if db.has_subscription_notification(
+                    sub_id,
+                    "expires_1d",
+                    telegram_user_id=telegram_user_id,
+                    expires_at=expires_at,
+                ):
                     continue
 
                 try:
@@ -4478,6 +4492,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     db.create_subscription_notification(
                         subscription_id=sub_id,
                         notification_type="expires_1d",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
                     )
 
                     log.info(
@@ -4517,11 +4533,17 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
             for sub in subs_1h:
                 sub_id = sub.get("id")
                 telegram_user_id = sub.get("telegram_user_id")
+                expires_at = sub.get("expires_at")
 
                 if not sub_id or not telegram_user_id:
                     continue
 
-                if db.has_subscription_notification(sub_id, "expires_1h"):
+                if db.has_subscription_notification(
+                    sub_id,
+                    "expires_1h",
+                    telegram_user_id=telegram_user_id,
+                    expires_at=expires_at,
+                ):
                     continue
 
                 try:
@@ -4534,6 +4556,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     db.create_subscription_notification(
                         subscription_id=sub_id,
                         notification_type="expires_1h",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
                     )
 
                     log.info(

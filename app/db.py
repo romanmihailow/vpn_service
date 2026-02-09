@@ -188,12 +188,22 @@ def init_db() -> None:
     CREATE TABLE IF NOT EXISTS subscription_notifications (
         id BIGSERIAL PRIMARY KEY,
         subscription_id BIGINT NOT NULL REFERENCES vpn_subscriptions(id) ON DELETE CASCADE,
+        telegram_user_id BIGINT, -- для дедупликации по пользователю
+        expires_at TIMESTAMPTZ, -- время окончания подписки на момент уведомления
         notification_type VARCHAR(32) NOT NULL, -- 'expires_3d', 'expires_1d', 'expired'
         sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    ALTER TABLE subscription_notifications
+        ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT;
+    ALTER TABLE subscription_notifications
+        ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_notifications_unique
         ON subscription_notifications (subscription_id, notification_type);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_notifications_user_expiry
+        ON subscription_notifications (telegram_user_id, notification_type, expires_at);
 
     CREATE INDEX IF NOT EXISTS idx_subscription_notifications_type
         ON subscription_notifications (notification_type);
@@ -951,6 +961,8 @@ def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
 def create_subscription_notification(
     subscription_id: int,
     notification_type: str,
+    telegram_user_id: Optional[int] = None,
+    expires_at: Optional[datetime] = None,
 ) -> None:
     """
     Регистрирует факт отправки уведомления по подписке.
@@ -959,33 +971,63 @@ def create_subscription_notification(
     запись не будет дублироваться за счёт UNIQUE-индекса.
     """
     sql = """
-    INSERT INTO subscription_notifications (subscription_id, notification_type, sent_at)
-    VALUES (%s, %s, NOW())
-    ON CONFLICT (subscription_id, notification_type) DO NOTHING;
+    INSERT INTO subscription_notifications (
+        subscription_id,
+        notification_type,
+        telegram_user_id,
+        expires_at,
+        sent_at
+    )
+    VALUES (%s, %s, %s, %s, NOW())
+    ON CONFLICT DO NOTHING;
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (subscription_id, notification_type))
+            cur.execute(
+                sql,
+                (
+                    subscription_id,
+                    notification_type,
+                    telegram_user_id,
+                    expires_at,
+                ),
+            )
         conn.commit()
 
 
 def has_subscription_notification(
     subscription_id: int,
     notification_type: str,
+    telegram_user_id: Optional[int] = None,
+    expires_at: Optional[datetime] = None,
 ) -> bool:
     """
     Проверяет, отправляли ли уже уведомление нужного типа по этой подписке.
     """
-    sql = """
-    SELECT 1
-    FROM subscription_notifications
-    WHERE subscription_id = %s
-      AND notification_type = %s
-    LIMIT 1;
-    """
+    if telegram_user_id is not None and expires_at is not None:
+        sql = """
+        SELECT 1
+        FROM subscription_notifications
+        WHERE notification_type = %s
+          AND (
+            subscription_id = %s
+            OR (telegram_user_id = %s AND expires_at = %s)
+          )
+        LIMIT 1;
+        """
+        params = (notification_type, subscription_id, telegram_user_id, expires_at)
+    else:
+        sql = """
+        SELECT 1
+        FROM subscription_notifications
+        WHERE subscription_id = %s
+          AND notification_type = %s
+        LIMIT 1;
+        """
+        params = (subscription_id, notification_type)
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (subscription_id, notification_type))
+            cur.execute(sql, params)
             row = cur.fetchone()
             return row is not None
 
