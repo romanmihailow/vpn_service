@@ -136,7 +136,7 @@ def verify_heleket_ip(request: web.Request) -> bool:
 
 
 def verify_heleket_signature(raw_body: bytes) -> bool:
-    """
+    r"""
     Проверка подписи Heleket webhook.
 
     Алгоритм из доки:

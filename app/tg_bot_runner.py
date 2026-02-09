@@ -4375,7 +4375,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
     """
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             # Опциональное правило "не слать ночью"
             if not (9 <= now.hour <= 22):
                 log.debug(
