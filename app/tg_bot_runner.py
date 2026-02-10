@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
@@ -35,6 +35,66 @@ from .promo_codes import (
 )
 log = get_logger()
 promo_log = get_promo_logger()
+
+BROADCAST_BATCH_SIZE = 25
+BROADCAST_BATCH_SLEEP = 1.0
+MAX_BROADCAST_USERS = 5000
+NOTIFY_BATCH_SIZE = 25
+NOTIFY_BATCH_SLEEP = 1.0
+
+
+async def safe_send_message(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    **kwargs: Any,
+) -> bool:
+    try:
+        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        return True
+    except TelegramRetryAfter as e:
+        log.warning(
+            "[SafeSend] RetryAfter for chat_id=%s: %s",
+            chat_id,
+            e.retry_after,
+        )
+        await asyncio.sleep(e.retry_after)
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            return True
+        except TelegramRetryAfter as e2:
+            log.warning(
+                "[SafeSend] RetryAfter again for chat_id=%s: %s",
+                chat_id,
+                e2.retry_after,
+            )
+            return False
+        except TelegramForbiddenError:
+            log.warning("[SafeSend] Bot is blocked by chat_id=%s", chat_id)
+            return False
+        except TelegramBadRequest as e2:
+            log.warning(
+                "[SafeSend] BadRequest for chat_id=%s: %r",
+                chat_id,
+                e2,
+            )
+            return False
+        except Exception as e2:
+            log.error(
+                "[SafeSend] Unexpected error for chat_id=%s: %r",
+                chat_id,
+                e2,
+            )
+            return False
+    except TelegramForbiddenError:
+        log.warning("[SafeSend] Bot is blocked by chat_id=%s", chat_id)
+        return False
+    except TelegramBadRequest as e:
+        log.warning("[SafeSend] BadRequest for chat_id=%s: %r", chat_id, e)
+        return False
+    except Exception as e:
+        log.error("[SafeSend] Unexpected error for chat_id=%s: %r", chat_id, e)
+        return False
 
 
 def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
@@ -3201,8 +3261,22 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
         return
 
     total = len(users)
+    if total > MAX_BROADCAST_USERS:
+        log.warning(
+            "[Broadcast] User count %s exceeds limit %s, truncating",
+            total,
+            MAX_BROADCAST_USERS,
+        )
+        users = users[:MAX_BROADCAST_USERS]
+        total = len(users)
+        await message.answer(
+            f"Слишком много пользователей для одной рассылки. Отправлю первые {total}.",
+            disable_web_page_preview=True,
+        )
+
     success = 0
     failed = 0
+    batch_count = 0
 
     await message.answer(
         f"Начинаю рассылку по {total} пользователям...\n"
@@ -3215,43 +3289,21 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
         if not chat_id:
             continue
 
-        try:
-            await message.bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                disable_web_page_preview=True,
-            )
+        ok = await safe_send_message(
+            bot=message.bot,
+            chat_id=chat_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+        if ok:
             success += 1
-            await asyncio.sleep(0.05)
-        except TelegramForbiddenError:
+        else:
             failed += 1
-            log.warning("[Broadcast] Bot is blocked by chat_id=%s", chat_id)
-            continue
-        except TelegramRetryAfter as e:
-            failed += 1
-            log.warning(
-                "[Broadcast] RetryAfter for chat_id=%s: %s seconds",
-                chat_id,
-                e.retry_after,
-            )
-            await asyncio.sleep(e.retry_after)
-            continue
-        except TelegramBadRequest as e:
-            failed += 1
-            log.warning(
-                "[Broadcast] BadRequest for chat_id=%s: %s",
-                chat_id,
-                repr(e),
-            )
-            continue
-        except Exception as e:
-            failed += 1
-            log.error(
-                "[Broadcast] Unexpected error for chat_id=%s: %s",
-                chat_id,
-                repr(e),
-            )
-            continue
+
+        batch_count += 1
+        if batch_count >= BROADCAST_BATCH_SIZE:
+            await asyncio.sleep(BROADCAST_BATCH_SLEEP)
+            batch_count = 0
 
     await message.answer(
         f"Рассылка завершена.\n"
@@ -4498,38 +4550,45 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
     - не шлём уведомления ночью (по UTC: только 09–22);
     - добавляем inline-клавиатуру SUBSCRIPTION_RENEW_KEYBOARD.
     """
-    while True:
-        try:
-            now = datetime.now(timezone.utc)
-            # Опциональное правило "не слать ночью"
-            if not (9 <= now.hour <= 22):
-                log.debug(
-                    "[AutoNotify] Skip notifications at this hour (utc_hour=%s)",
-                    now.hour,
-                )
-                await asyncio.sleep(600)
-                continue
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NOTIFY_EXPIRING):
+        log.info("[AutoNotify] Job already running in another instance")
+        return
 
-            # --- Напоминание за 3 дня до окончания ---
-            subs_3d = db.get_subscriptions_expiring_in_window(60, 73)
-            for sub in subs_3d:
-                sub_id = sub.get("id")
-                telegram_user_id = sub.get("telegram_user_id")
-                expires_at = sub.get("expires_at")
-
-                if not sub_id or not telegram_user_id:
+    try:
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                # Опциональное правило "не слать ночью"
+                if not (9 <= now.hour <= 22):
+                    log.debug(
+                        "[AutoNotify] Skip notifications at this hour (utc_hour=%s)",
+                        now.hour,
+                    )
+                    await asyncio.sleep(600)
                     continue
 
-                if db.has_subscription_notification(
-                    sub_id,
-                    "expires_3d",
-                    telegram_user_id=telegram_user_id,
-                    expires_at=expires_at,
-                ):
-                    continue
+                batch_count = 0
 
-                try:
-                    await bot.send_message(
+                # --- Напоминание за 3 дня до окончания ---
+                subs_3d = db.get_subscriptions_expiring_in_window(60, 73)
+                for sub in subs_3d:
+                    sub_id = sub.get("id")
+                    telegram_user_id = sub.get("telegram_user_id")
+                    expires_at = sub.get("expires_at")
+
+                    if not sub_id or not telegram_user_id:
+                        continue
+
+                    if db.has_subscription_notification(
+                        sub_id,
+                        "expires_3d",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
+                    ):
+                        continue
+
+                    ok = await safe_send_message(
+                        bot=bot,
                         chat_id=telegram_user_id,
                         text=(
                             "⏳ Срок действия VPN скоро закончится\n\n"
@@ -4542,65 +4601,44 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
+                    if ok:
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="expires_3d",
+                            telegram_user_id=telegram_user_id,
+                            expires_at=expires_at,
+                        )
+                        log.info(
+                            "[AutoNotify] Sent 3d-before-expire notification sub_id=%s tg_id=%s",
+                            sub_id,
+                            telegram_user_id,
+                        )
 
-                    db.create_subscription_notification(
-                        subscription_id=sub_id,
-                        notification_type="expires_3d",
+                    batch_count += 1
+                    if batch_count >= NOTIFY_BATCH_SIZE:
+                        await asyncio.sleep(NOTIFY_BATCH_SLEEP)
+                        batch_count = 0
+
+                # --- Напоминание за 1 день до окончания ---
+                subs_1d = db.get_subscriptions_expiring_in_window(12, 25)
+                for sub in subs_1d:
+                    sub_id = sub.get("id")
+                    telegram_user_id = sub.get("telegram_user_id")
+                    expires_at = sub.get("expires_at")
+
+                    if not sub_id or not telegram_user_id:
+                        continue
+
+                    if db.has_subscription_notification(
+                        sub_id,
+                        "expires_1d",
                         telegram_user_id=telegram_user_id,
                         expires_at=expires_at,
-                    )
+                    ):
+                        continue
 
-                    log.info(
-                        "[AutoNotify] Sent 3d-before-expire notification sub_id=%s tg_id=%s",
-                        sub_id,
-                        telegram_user_id,
-                    )
-
-                except TelegramForbiddenError:
-                    log.warning(
-                        "[AutoNotify] Bot is blocked by tg_id=%s (3d notice)",
-                        telegram_user_id,
-                    )
-                except TelegramRetryAfter as e:
-                    log.warning(
-                        "[AutoNotify] RetryAfter for tg_id=%s (3d notice): %s",
-                        telegram_user_id,
-                        e.retry_after,
-                    )
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest as e:
-                    log.warning(
-                        "[AutoNotify] BadRequest for tg_id=%s (3d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-                except Exception as e:
-                    log.error(
-                        "[AutoNotify] Unexpected error for tg_id=%s (3d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-
-            # --- Напоминание за 1 день до окончания ---
-            subs_1d = db.get_subscriptions_expiring_in_window(12, 25)
-            for sub in subs_1d:
-                sub_id = sub.get("id")
-                telegram_user_id = sub.get("telegram_user_id")
-                expires_at = sub.get("expires_at")
-
-                if not sub_id or not telegram_user_id:
-                    continue
-
-                if db.has_subscription_notification(
-                    sub_id,
-                    "expires_1d",
-                    telegram_user_id=telegram_user_id,
-                    expires_at=expires_at,
-                ):
-                    continue
-
-                try:
-                    await bot.send_message(
+                    ok = await safe_send_message(
+                        bot=bot,
                         chat_id=telegram_user_id,
                         text=(
                             "⚠️ VPN доступ скоро закончится\n\n"
@@ -4613,117 +4651,91 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
+                    if ok:
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="expires_1d",
+                            telegram_user_id=telegram_user_id,
+                            expires_at=expires_at,
+                        )
+                        log.info(
+                            "[AutoNotify] Sent 1d-before-expire notification sub_id=%s tg_id=%s",
+                            sub_id,
+                            telegram_user_id,
+                        )
 
-                    db.create_subscription_notification(
-                        subscription_id=sub_id,
-                        notification_type="expires_1d",
+                    batch_count += 1
+                    if batch_count >= NOTIFY_BATCH_SIZE:
+                        await asyncio.sleep(NOTIFY_BATCH_SLEEP)
+                        batch_count = 0
+
+                # --- Напоминание за 1 час до окончания ---
+                # Окно примерно от 1 до 2 часов до окончания (как и выше — в "часах", а не минутах)
+                subs_1h = db.get_subscriptions_expiring_in_window(1, 2)
+                for sub in subs_1h:
+                    sub_id = sub.get("id")
+                    telegram_user_id = sub.get("telegram_user_id")
+                    expires_at = sub.get("expires_at")
+
+                    if not sub_id or not telegram_user_id:
+                        continue
+
+                    if db.has_subscription_notification(
+                        sub_id,
+                        "expires_1h",
                         telegram_user_id=telegram_user_id,
                         expires_at=expires_at,
-                    )
+                    ):
+                        continue
 
-                    log.info(
-                        "[AutoNotify] Sent 1d-before-expire notification sub_id=%s tg_id=%s",
-                        sub_id,
-                        telegram_user_id,
-                    )
+                    try:
+                        # Используем уже готовую функцию уведомления об окончании,
+                        # но вызываем её ЗА час до деактивации.
+                        await send_subscription_expired_notification(
+                            telegram_user_id=telegram_user_id,
+                        )
 
-                except TelegramForbiddenError:
-                    log.warning(
-                        "[AutoNotify] Bot is blocked by tg_id=%s (1d notice)",
-                        telegram_user_id,
-                    )
-                except TelegramRetryAfter as e:
-                    log.warning(
-                        "[AutoNotify] RetryAfter for tg_id=%s (1d notice): %s",
-                        telegram_user_id,
-                        e.retry_after,
-                    )
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest as e:
-                    log.warning(
-                        "[AutoNotify] BadRequest for tg_id=%s (1d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-                except Exception as e:
-                    log.error(
-                        "[AutoNotify] Unexpected error for tg_id=%s (1d notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="expires_1h",
+                            telegram_user_id=telegram_user_id,
+                            expires_at=expires_at,
+                        )
 
-            # --- Напоминание за 1 час до окончания ---
-            # Окно примерно от 1 до 2 часов до окончания (как и выше — в "часах", а не минутах)
-            subs_1h = db.get_subscriptions_expiring_in_window(1, 2)
-            for sub in subs_1h:
-                sub_id = sub.get("id")
-                telegram_user_id = sub.get("telegram_user_id")
-                expires_at = sub.get("expires_at")
+                        log.info(
+                            "[AutoNotify] Sent 1h-before-expire notification sub_id=%s tg_id=%s",
+                            sub_id,
+                            telegram_user_id,
+                        )
+                    except TelegramRetryAfter as e:
+                        log.warning(
+                            "[AutoNotify] RetryAfter for tg_id=%s (1h notice): %s",
+                            telegram_user_id,
+                            e.retry_after,
+                        )
+                        await asyncio.sleep(e.retry_after)
+                    except Exception as e:
+                        log.error(
+                            "[AutoNotify] Unexpected error for tg_id=%s (1h notice): %r",
+                            telegram_user_id,
+                            e,
+                        )
 
-                if not sub_id or not telegram_user_id:
-                    continue
+                    batch_count += 1
+                    if batch_count >= NOTIFY_BATCH_SIZE:
+                        await asyncio.sleep(NOTIFY_BATCH_SLEEP)
+                        batch_count = 0
 
-                if db.has_subscription_notification(
-                    sub_id,
-                    "expires_1h",
-                    telegram_user_id=telegram_user_id,
-                    expires_at=expires_at,
-                ):
-                    continue
+            except Exception as e:
+                log.error(
+                    "[AutoNotify] Unexpected error in auto_notify_expiring_subscriptions: %r",
+                    e,
+                )
 
-                try:
-                    # Используем уже готовую функцию уведомления об окончании,
-                    # но вызываем её ЗА час до деактивации.
-                    await send_subscription_expired_notification(
-                        telegram_user_id=telegram_user_id,
-                    )
-
-                    db.create_subscription_notification(
-                        subscription_id=sub_id,
-                        notification_type="expires_1h",
-                        telegram_user_id=telegram_user_id,
-                        expires_at=expires_at,
-                    )
-
-                    log.info(
-                        "[AutoNotify] Sent 1h-before-expire notification sub_id=%s tg_id=%s",
-                        sub_id,
-                        telegram_user_id,
-                    )
-
-                except TelegramForbiddenError:
-                    log.warning(
-                        "[AutoNotify] Bot is blocked by tg_id=%s (1h notice)",
-                        telegram_user_id,
-                    )
-                except TelegramRetryAfter as e:
-                    log.warning(
-                        "[AutoNotify] RetryAfter for tg_id=%s (1h notice): %s",
-                        telegram_user_id,
-                        e.retry_after,
-                    )
-                    await asyncio.sleep(e.retry_after)
-                except TelegramBadRequest as e:
-                    log.warning(
-                        "[AutoNotify] BadRequest for tg_id=%s (1h notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-                except Exception as e:
-                    log.error(
-                        "[AutoNotify] Unexpected error for tg_id=%s (1h notice): %r",
-                        telegram_user_id,
-                        e,
-                    )
-
-        except Exception as e:
-            log.error(
-                "[AutoNotify] Unexpected error in auto_notify_expiring_subscriptions: %r",
-                e,
-            )
-
-        # Проверяем примерно раз в 10 минут
-        await asyncio.sleep(600)
+            # Проверяем примерно раз в 10 минут
+            await asyncio.sleep(600)
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_NOTIFY_EXPIRING)
 
 
 async def auto_deactivate_expired_subscriptions() -> None:
@@ -4733,48 +4745,55 @@ async def auto_deactivate_expired_subscriptions() -> None:
     (Уведомление пользователю об окончании теперь отправляется заранее —
     за ~1 час до окончания в auto_notify_expiring_subscriptions.)
     """
-    while True:
-        try:
-            expired_subs = db.get_expired_active_subscriptions()
-            for sub in expired_subs:
-                sub_id = sub.get("id")
-                pub_key = sub.get("wg_public_key")
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED):
+        log.info("[AutoExpire] Job already running in another instance")
+        return
 
-                if not sub_id:
-                    continue
+    try:
+        while True:
+            try:
+                expired_subs = db.get_expired_active_subscriptions()
+                for sub in expired_subs:
+                    sub_id = sub.get("id")
+                    pub_key = sub.get("wg_public_key")
 
-                # помечаем неактивной в базе
-                deactivated = db.deactivate_subscription_by_id(
-                    sub_id=sub_id,
-                    event_name="auto_expire",
+                    if not sub_id:
+                        continue
+
+                    # помечаем неактивной в базе
+                    deactivated = db.deactivate_subscription_by_id(
+                        sub_id=sub_id,
+                        event_name="auto_expire",
+                    )
+
+                    if not deactivated:
+                        continue
+
+                    if pub_key:
+                        try:
+                            log.info(
+                                "[AutoExpire] Remove peer pubkey=%s for sub_id=%s",
+                                pub_key,
+                                sub_id,
+                            )
+                            wg.remove_peer(pub_key)
+                        except Exception as e:
+                            log.error(
+                                "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
+                                sub_id,
+                                repr(e),
+                            )
+
+            except Exception as e:
+                log.error(
+                    "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
+                    repr(e),
                 )
 
-                if not deactivated:
-                    continue
-
-                if pub_key:
-                    try:
-                        log.info(
-                            "[AutoExpire] Remove peer pubkey=%s for sub_id=%s",
-                            pub_key,
-                            sub_id,
-                        )
-                        wg.remove_peer(pub_key)
-                    except Exception as e:
-                        log.error(
-                            "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
-                            sub_id,
-                            repr(e),
-                        )
-
-        except Exception as e:
-            log.error(
-                "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
-                repr(e),
-            )
-
-        # Проверяем раз в 60 секунд (можешь настроить под себя)
-        await asyncio.sleep(60)
+            # Проверяем раз в 60 секунд (можешь настроить под себя)
+            await asyncio.sleep(60)
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED)
 
 
 async def main() -> None:

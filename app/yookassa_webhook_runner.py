@@ -809,6 +809,19 @@ async def handle_yookassa_webhook(request: web.Request) -> web.Response:
     #     log.info("[YooKassaWebhook] Test payment %s — игнорируем в бою", payment_id)
     #     return web.Response(text="ok (test payment ignored)")
 
+    # Идемпотентность по payment_id
+    if not payment_id:
+        log.error("[YooKassaWebhook] No payment_id in object")
+        return web.Response(text="ok (no payment id)")
+
+    is_new_event = db.try_register_payment_event("yookassa", str(payment_id))
+    if not is_new_event:
+        log.info(
+            "[YooKassaWebhook] Payment %s already processed (payment_events)",
+            payment_id,
+        )
+        return web.Response(text="ok (already processed)")
+
     # Идемпотентность: если уже создавали подписку с таким event_name, ничего не делаем
     event_name = f"yookassa_payment_succeeded_{payment_id}"
     if payment_id and db.subscription_exists_by_event(event_name):

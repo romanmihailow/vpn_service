@@ -13,6 +13,7 @@ _ip_lock_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "ip_allocation_lock_ctx",
     default=None,
 )
+_job_lock_conns: Dict[int, psycopg2.extensions.connection] = {}
 
 
 _POOL = psycopg2.pool.ThreadedConnectionPool(
@@ -55,6 +56,45 @@ def release_ip_allocation_lock() -> None:
     finally:
         _POOL.putconn(conn)
         _ip_lock_ctx.set(None)
+
+
+def acquire_job_lock(lock_id: int) -> bool:
+    """
+    Пытается взять pg_try_advisory_lock(lock_id).
+    Возвращает True, если лок получен, иначе False.
+    """
+    if lock_id in _job_lock_conns:
+        return True
+
+    conn = _POOL.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s);", (lock_id,))
+            row = cur.fetchone()
+            acquired = bool(row[0]) if row else False
+        if acquired:
+            _job_lock_conns[lock_id] = conn
+            return True
+        _POOL.putconn(conn)
+        return False
+    except Exception:
+        _POOL.putconn(conn)
+        raise
+
+
+def release_job_lock(lock_id: int) -> None:
+    """
+    Снимает pg_advisory_unlock(lock_id), если он был взят.
+    """
+    conn = _job_lock_conns.pop(lock_id, None)
+    if conn is None:
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s);", (lock_id,))
+    finally:
+        _POOL.putconn(conn)
 
 
 @contextmanager
@@ -275,6 +315,19 @@ def init_db() -> None:
 
     CREATE INDEX IF NOT EXISTS idx_subscription_notifications_type
         ON subscription_notifications (notification_type);
+
+    --------------------------------------------------------------------
+    -- Обработанные платежные события (идемпотентность webhook-ов)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS payment_events (
+        id BIGSERIAL PRIMARY KEY,
+        provider TEXT NOT NULL,     -- 'yookassa', 'heleket'
+        event_id TEXT NOT NULL,     -- id платежа/события
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_provider_event
+        ON payment_events (provider, event_id);
     """
 
 
@@ -711,6 +764,43 @@ def release_ip_in_pool(ip: str) -> None:
                 (ip,),
             )
         conn.commit()
+
+
+def try_register_payment_event(provider: str, event_id: str) -> bool:
+    """
+    Пытается зарегистрировать факт обработки события платежа.
+    Возвращает True, если событие видим впервые, иначе False.
+    """
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO payment_events (provider, event_id)
+                    VALUES (%s, %s);
+                    """,
+                    (provider, event_id),
+                )
+            conn.commit()
+            return True
+        except psycopg2.IntegrityError as e:
+            conn.rollback()
+            if getattr(e, "pgcode", None) == "23505":
+                return False
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def mark_payment_event_error(provider: str, event_id: str) -> None:
+    """
+    Опциональная функция для расширения логики ошибок платежей.
+    Сейчас оставлена как no-op, чтобы не усложнять схему.
+    """
+    _ = provider
+    _ = event_id
+    return None
 
 
 def get_last_subscriptions(limit: int = 50):

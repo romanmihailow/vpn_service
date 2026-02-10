@@ -16,6 +16,9 @@ class Settings(BaseModel):
     DB_POOL_MIN: int = int(os.getenv("DB_POOL_MIN", "1"))
     DB_POOL_MAX: int = int(os.getenv("DB_POOL_MAX", "10"))
     DB_IP_ALLOC_LOCK_ID: int = int(os.getenv("DB_IP_ALLOC_LOCK_ID", "4242001"))
+    # Advisory lock IDs для фоновых задач (single-instance)
+    DB_JOB_LOCK_DEACTIVATE_EXPIRED: int = int(os.getenv("DB_JOB_LOCK_DEACTIVATE_EXPIRED", "2001"))
+    DB_JOB_LOCK_NOTIFY_EXPIRING: int = int(os.getenv("DB_JOB_LOCK_NOTIFY_EXPIRING", "2002"))
 
     WG_INTERFACE_NAME: str = os.getenv("WG_INTERFACE_NAME", "wg0")
     WG_SERVER_PUBLIC_KEY: str = os.getenv("WG_SERVER_PUBLIC_KEY", "")

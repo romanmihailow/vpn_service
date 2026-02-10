@@ -351,6 +351,24 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
         )
         return web.Response(text="ok (ignored)")
 
+    event_id = None
+    if uuid:
+        event_id = str(uuid)
+    elif order_id:
+        event_id = str(order_id)
+
+    if not event_id:
+        log.error("[HeleketWebhook] missing event id (uuid/order_id)")
+        return web.Response(text="ok (no event id)")
+
+    is_new_event = db.try_register_payment_event("heleket", event_id)
+    if not is_new_event:
+        log.info(
+            "[HeleketWebhook] payment event already processed event_id=%s",
+            event_id,
+        )
+        return web.Response(text="ok (already processed)")
+
 
     # достаём мету из additional_data
     telegram_user_id = None
