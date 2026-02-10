@@ -8,7 +8,7 @@
 
                  VPN
 
-MaxNet VPN Bot
+MaxNet VPN Bot_
 
 Telegram-бот для автоматической выдачи и управления VPN-доступом на базе WireGuard.
 
