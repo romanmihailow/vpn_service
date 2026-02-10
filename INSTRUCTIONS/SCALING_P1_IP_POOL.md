@@ -1,4 +1,4 @@
-# P1.1 — VPN IP Pool (PostgreSQL)
+# P1.1 — VPN IP Pool (PostgreSQL)--
 
 ## Что было до P1
 - IP выдавался через перебор диапазона `/16` в `generate_client_ip()`.
