@@ -709,13 +709,18 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
         base_dt = old_expires_at if old_expires_at and old_expires_at > now else now
         new_expires_at = base_dt + timedelta(days=days)
 
-        extended = db.update_subscription_expiration(
-            sub_id=base_sub_id,
-            expires_at=new_expires_at,
-            event_name=event_name,
-        )
-        if not extended:
-            log.error("[YooKassaWebhook] Failed to extend subscription for tg_id=%s", telegram_user_id)
+        try:
+            db.update_subscription_expiration(
+                sub_id=base_sub_id,
+                expires_at=new_expires_at,
+                event_name=event_name,
+            )
+        except Exception as e:
+            log.error(
+                "[YooKassaWebhook] Failed to extend subscription for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
             return
 
         log.info(
