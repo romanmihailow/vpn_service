@@ -874,7 +874,8 @@ ADMIN_INFO_TEXT = (
     "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
     "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки.\n\n"
     "/broadcast — отправить текстовую рассылку всем пользователям.\n\n"
-    "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes."
+    "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes.\n\n"
+    "/admin_stats — диагностика IP-пула и активных подписок."
 )
 
 
@@ -904,6 +905,36 @@ def is_admin(message: Message) -> bool:
         return True
 
     return False
+
+
+async def send_admin_stats(message: Message) -> None:
+    try:
+        stats = db.get_admin_stats()
+    except Exception as e:
+        log.error("[AdminStats] Failed to get admin stats: %r", e)
+        await message.answer("Не удалось получить статистику. См. логи.")
+        return
+
+    text = (
+        "📊 <b>Admin stats</b>\n\n"
+        "<pre>"
+        "IP pool:\n"
+        f"  total:      {stats['pool_total']}\n"
+        f"  allocated:  {stats['pool_allocated']}\n"
+        f"  free:       {stats['pool_free']}\n\n"
+        "Subscriptions:\n"
+        f"  active_subs: {stats['active_subs']}\n"
+        f"  active_ips:  {stats['active_ips']}\n\n"
+        "Consistency:\n"
+        f"  subs_with_ip_not_in_pool:      {stats['subs_with_ip_not_in_pool']}\n"
+        f"  allocated_without_active_sub:  {stats['allocated_without_active_sub']}\n"
+        "</pre>"
+    )
+
+    await message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
 
 
 
@@ -3014,6 +3045,15 @@ async def cmd_admin_info(message: Message) -> None:
     )
 
 
+@router.message(Command("admin_stats"))
+async def cmd_admin_stats(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    await send_admin_stats(message)
+
+
 @router.message(Command("admin_cmd"))
 async def cmd_admin_cmd(message: Message) -> None:
     if not is_admin(message):
@@ -3048,6 +3088,12 @@ async def cmd_admin_cmd(message: Message) -> None:
                 InlineKeyboardButton(
                     text="📃 Список подписок",
                     callback_data="admcmd:list",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📊 Статистика IP-пула",
+                    callback_data="admcmd:stats",
                 ),
             ],
         ]
@@ -4223,6 +4269,11 @@ async def admin_cmd_inline(callback: CallbackQuery, state: FSMContext) -> None:
 
     if action == "list":
         await cmd_admin_list(callback.message)
+        await callback.answer()
+        return
+
+    if action == "stats":
+        await send_admin_stats(callback.message)
         await callback.answer()
         return
 

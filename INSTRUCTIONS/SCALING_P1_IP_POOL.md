@@ -50,3 +50,24 @@ SET allocated = FALSE,
     allocated_at = NULL
 WHERE ip = '10.8.0.55'::inet;
 ```
+
+## Admin: /admin_stats
+
+### Что сделано
+- Добавлена админ-команда `/admin_stats` (и кнопка в админ-меню).
+- Показывает статистику пула, активных подписок и проверку консистентности.
+
+### Какие запросы используются
+- Сводка по пулу:
+  - `SELECT COUNT(*) AS total, ... FROM vpn_ip_pool`
+- Сводка по активным подпискам:
+  - `SELECT COUNT(*) AS active_subs, COUNT(DISTINCT vpn_ip::inet) AS active_ips FROM vpn_subscriptions WHERE active = TRUE AND expires_at > NOW()`
+- Проверка консистентности:
+  - `subs_with_ip_not_in_pool`
+  - `allocated_without_active_sub`
+
+### Как использовать
+- В Telegram как админ отправить `/admin_stats`.
+- При проблемах смотреть:
+  - `free` — если мало, диапазон скоро закончится;
+  - `subs_with_ip_not_in_pool` и `allocated_without_active_sub` — должны быть 0.

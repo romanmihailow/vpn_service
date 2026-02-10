@@ -815,6 +815,88 @@ def get_active_promo_subscribers_count() -> int:
             return int(row[0])
 
 
+def get_admin_stats() -> Dict[str, int]:
+    """
+    Возвращает сводную статистику для админ-диагностики IP-пула и подписок.
+    """
+    result: Dict[str, int] = {
+        "pool_total": 0,
+        "pool_allocated": 0,
+        "pool_free": 0,
+        "active_subs": 0,
+        "active_ips": 0,
+        "subs_with_ip_not_in_pool": 0,
+        "allocated_without_active_sub": 0,
+    }
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  COUNT(*) FILTER (WHERE allocated) AS allocated,
+                  COUNT(*) FILTER (WHERE NOT allocated) AS free
+                FROM vpn_ip_pool;
+                """
+            )
+            row = cur.fetchone()
+            if row:
+                result["pool_total"] = int(row[0] or 0)
+                result["pool_allocated"] = int(row[1] or 0)
+                result["pool_free"] = int(row[2] or 0)
+
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS active_subs,
+                  COUNT(DISTINCT vpn_ip::inet) AS active_ips
+                FROM vpn_subscriptions
+                WHERE active = TRUE
+                  AND expires_at > NOW();
+                """
+            )
+            row = cur.fetchone()
+            if row:
+                result["active_subs"] = int(row[0] or 0)
+                result["active_ips"] = int(row[1] or 0)
+
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS subs_with_ip_not_in_pool
+                FROM vpn_subscriptions s
+                LEFT JOIN vpn_ip_pool p
+                  ON p.ip = s.vpn_ip::inet
+                WHERE s.active = TRUE
+                  AND s.expires_at > NOW()
+                  AND p.ip IS NULL;
+                """
+            )
+            row = cur.fetchone()
+            if row:
+                result["subs_with_ip_not_in_pool"] = int(row[0] or 0)
+
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) AS allocated_without_active_sub
+                FROM vpn_ip_pool p
+                LEFT JOIN vpn_subscriptions s
+                  ON s.vpn_ip::inet = p.ip
+                  AND s.active = TRUE
+                  AND s.expires_at > NOW()
+                WHERE p.allocated = TRUE
+                  AND s.id IS NULL;
+                """
+            )
+            row = cur.fetchone()
+            if row:
+                result["allocated_without_active_sub"] = int(row[0] or 0)
+
+    return result
+
+
 
 def get_latest_subscription_for_telegram(
     telegram_user_id: int,
