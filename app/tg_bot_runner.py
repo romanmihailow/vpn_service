@@ -802,6 +802,10 @@ async def cmd_terms(message: Message) -> None:
         )
     except Exception as e:
         log.error("Failed to send TERMS.md: %s", repr(e))
+        await message.answer(
+            "Не удалось отправить файл TERMS.md. Сообщи, пожалуйста, админу.",
+            disable_web_page_preview=True,
+        )
 
 
 @router.message(Command("privacy"))
