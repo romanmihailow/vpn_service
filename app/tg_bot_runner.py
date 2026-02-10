@@ -41,6 +41,7 @@ BROADCAST_BATCH_SLEEP = 1.0
 MAX_BROADCAST_USERS = 5000
 NOTIFY_BATCH_SIZE = 25
 NOTIFY_BATCH_SLEEP = 1.0
+TELEGRAM_GLOBAL_SEMAPHORE = asyncio.Semaphore(20)
 
 
 async def safe_send_message(
@@ -49,8 +50,12 @@ async def safe_send_message(
     text: str,
     **kwargs: Any,
 ) -> bool:
+    async def _send_once() -> None:
+        async with TELEGRAM_GLOBAL_SEMAPHORE:
+            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+
     try:
-        await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+        await _send_once()
         return True
     except TelegramRetryAfter as e:
         log.warning(
@@ -60,7 +65,7 @@ async def safe_send_message(
         )
         await asyncio.sleep(e.retry_after)
         try:
-            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await _send_once()
             return True
         except TelegramRetryAfter as e2:
             log.warning(

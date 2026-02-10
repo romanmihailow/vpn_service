@@ -1,5 +1,6 @@
 # /home/vpn_service/app/heleket_webhook_runner.py
 import json
+import asyncio
 import base64
 import hmac
 import hashlib
@@ -21,6 +22,308 @@ from .tg_bot_runner import deactivate_existing_active_subscriptions
 
 
 log = get_heleket_logger()
+
+
+async def process_heleket_event(data: dict) -> None:
+    try:
+        event_type = data.get("type")
+        uuid = data.get("uuid")
+        order_id = data.get("order_id")
+        status = data.get("status")
+        payment_status = data.get("payment_status")
+        is_final = data.get("is_final")
+        currency = data.get("currency")
+        payment_amount = data.get("payment_amount")
+        additional_data_raw = data.get("additional_data")
+
+        effective_status = payment_status or status
+
+        log.info(
+            "[HeleketWebhook] type=%r uuid=%r order_id=%r status=%r payment_status=%r effective_status=%r is_final=%r currency=%r payment_amount=%r additional_data=%r",
+            event_type,
+            uuid,
+            order_id,
+            status,
+            payment_status,
+            effective_status,
+            is_final,
+            currency,
+            payment_amount,
+            additional_data_raw,
+        )
+
+        is_final_bool = bool(is_final) if is_final is not None else effective_status in ("paid", "paid_over")
+
+        if not is_final_bool or effective_status not in ("paid", "paid_over"):
+            log.info(
+                "[HeleketWebhook] ignore non-final or non-paid status uuid=%r status=%r payment_status=%r effective_status=%r is_final=%r",
+                uuid,
+                status,
+                payment_status,
+                effective_status,
+                is_final,
+            )
+            return
+
+        # достаём мету из additional_data
+        telegram_user_id = None
+        tariff_code = None
+
+        if isinstance(additional_data_raw, str) and additional_data_raw.strip():
+            try:
+                meta = json.loads(additional_data_raw)
+                telegram_user_id_raw = meta.get("telegram_user_id")
+                tariff_code = meta.get("tariff_code")
+                if telegram_user_id_raw is not None:
+                    telegram_user_id = int(telegram_user_id_raw)
+            except Exception as e:
+                log.error(
+                    "[HeleketWebhook] failed to parse additional_data json=%r: %r",
+                    additional_data_raw,
+                    e,
+                )
+
+        if telegram_user_id is None or not tariff_code:
+            log.error(
+                "[HeleketWebhook] missing telegram_user_id or tariff_code in additional_data=%r",
+                additional_data_raw,
+            )
+            return
+
+        days = get_tariff_days_heleket(tariff_code)
+        if not days:
+            log.error("[HeleketWebhook] unknown tariff_code=%r", tariff_code)
+            return
+
+        event_name = f"heleket_payment_paid_{uuid}"
+        if uuid and db.subscription_exists_by_event(event_name):
+            log.info(
+                "[HeleketWebhook] payment uuid=%s already processed (event_name=%s)",
+                uuid,
+                event_name,
+            )
+            return
+
+        now = datetime.now(timezone.utc)
+        active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id)
+
+        log.info(
+            "[HeleketWebhook] active_subscriptions_for_tg_id=%s: %r",
+            telegram_user_id,
+            active_subs,
+        )
+
+        heleket_sub = None
+        for sub in active_subs:
+            if sub.get("channel_name") == "Heleket" or str(sub.get("period", "")).startswith("heleket_"):
+                heleket_sub = sub
+                break
+
+        base_sub = None
+        if heleket_sub is not None:
+            base_sub = heleket_sub
+        elif active_subs:
+            base_sub = active_subs[0]
+
+        if base_sub is not None:
+            old_expires_at = base_sub["expires_at"]
+            base_dt = old_expires_at if old_expires_at > now else now
+            new_expires_at = base_dt + timedelta(days=days)
+
+            try:
+                db.update_subscription_expiration(
+                    sub_id=base_sub["id"],
+                    expires_at=new_expires_at,
+                    event_name=event_name,
+                )
+                log.info(
+                    "[HeleketWebhook] extended subscription id=%s (channel=%s) for tg_id=%s: old_expires=%s new_expires=%s (+%s days)",
+                    base_sub["id"],
+                    base_sub.get("channel_name"),
+                    telegram_user_id,
+                    old_expires_at,
+                    new_expires_at,
+                    days,
+                )
+
+                try:
+                    await send_subscription_extended_notification(
+                        telegram_user_id=telegram_user_id,
+                        new_expires_at=new_expires_at,
+                        tariff_code=tariff_code,
+                        payment_channel="Heleket",
+                    )
+                except Exception as e:
+                    log.error(
+                        "[HeleketWebhook] failed to send extension notification for tg_id=%s: %r",
+                        telegram_user_id,
+                        e,
+                    )
+
+                try:
+                    rewards_result = db.apply_referral_rewards_for_subscription(
+                        payer_telegram_user_id=telegram_user_id,
+                        subscription_id=base_sub["id"],
+                        tariff_code=tariff_code,
+                        payment_source="heleket",
+                        payment_id=uuid,
+                    )
+                    log.info(
+                        "[HeleketWebhook] referral rewards result for payment_id=%s: %r",
+                        uuid,
+                        rewards_result,
+                    )
+                except Exception as e:
+                    log.error(
+                        "[HeleketWebhook] failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
+                        uuid,
+                        telegram_user_id,
+                        e,
+                    )
+
+                try:
+                    await send_referral_reward_notification(
+                        payer_telegram_user_id=telegram_user_id,
+                        payment_id=uuid,
+                        payment_source="Heleket",
+                    )
+                except Exception as e:
+                    log.error(
+                        "[HeleketWebhook] failed to send referral reward notifications for payment_id=%s: %r",
+                        uuid,
+                        e,
+                    )
+
+            except Exception as e:
+                log.error(
+                    "[HeleketWebhook] failed to extend subscription for tg_id=%s: %r",
+                    telegram_user_id,
+                    e,
+                )
+            return
+
+        expires_at = now + timedelta(days=days)
+
+        try:
+            deactivate_existing_active_subscriptions(
+                telegram_user_id=telegram_user_id,
+                reason="auto_replace_heleket",
+            )
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to deactivate old subs for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+
+        try:
+            client_priv, client_pub = wg.generate_keypair()
+            client_ip = wg.generate_client_ip()
+            allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to generate keys/ip for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            return
+
+        try:
+            wg.add_peer(
+                public_key=client_pub,
+                allowed_ip=allowed_ip,
+                telegram_user_id=telegram_user_id,
+            )
+        except Exception as e:
+            try:
+                db.release_ip_in_pool(client_ip)
+            except Exception:
+                pass
+            log.error(
+                "[HeleketWebhook] failed to add peer for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            return
+
+        try:
+            subscription_id = db.insert_subscription(
+                tribute_user_id=0,
+                telegram_user_id=telegram_user_id,
+                telegram_user_name="",
+                subscription_id=0,
+                period_id=0,
+                period=f"heleket_{tariff_code}",
+                channel_id=0,
+                channel_name="Heleket",
+                vpn_ip=client_ip,
+                wg_private_key=client_priv,
+                wg_public_key=client_pub,
+                expires_at=expires_at,
+                event_name=event_name,
+            )
+            log.info(
+                "[HeleketWebhook] inserted subscription for tg_id=%s ip=%s until %s",
+                telegram_user_id,
+                client_ip,
+                expires_at,
+            )
+
+            try:
+                rewards_result = db.apply_referral_rewards_for_subscription(
+                    payer_telegram_user_id=telegram_user_id,
+                    subscription_id=subscription_id,
+                    tariff_code=tariff_code,
+                    payment_source="heleket",
+                    payment_id=uuid,
+                )
+                log.info(
+                    "[HeleketWebhook] referral rewards result for payment_id=%s: %r",
+                    uuid,
+                    rewards_result,
+                )
+            except Exception as e:
+                log.error(
+                    "[HeleketWebhook] failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
+                    uuid,
+                    telegram_user_id,
+                    e,
+                )
+
+        except Exception as e:
+            try:
+                db.release_ip_in_pool(client_ip)
+            except Exception:
+                pass
+            log.error(
+                "[HeleketWebhook] failed to insert subscription for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            return
+
+        try:
+            config_text = wg.build_client_config(
+                client_private_key=client_priv,
+                client_ip=client_ip,
+            )
+            await send_vpn_config_to_user(
+                telegram_user_id=telegram_user_id,
+                config_text=config_text,
+                caption=(
+                    "Спасибо за оплату подписки MaxNet VPN через Heleket!\n\n"
+                    "Ниже — конфиг WireGuard и QR для подключения."
+                ),
+            )
+        except Exception as e:
+            log.error(
+                "[HeleketWebhook] failed to send config to tg_id=%s for payment_id=%s: %r",
+                telegram_user_id,
+                uuid,
+                e,
+            )
+    except Exception as e:
+        log.error("[HeleketWebhook] unexpected error in process: %r", e)
 
 
 HELEKET_API_PAYMENT_KEY = os.getenv("HELEKET_API_PAYMENT_KEY")
@@ -368,6 +671,9 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             event_id,
         )
         return web.Response(text="ok (already processed)")
+
+    asyncio.create_task(process_heleket_event(data))
+    return web.Response(text="ok")
 
 
     # достаём мету из additional_data
