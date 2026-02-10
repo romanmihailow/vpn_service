@@ -788,11 +788,20 @@ async def cmd_terms(message: Message) -> None:
         )
         return
 
-    await message.answer(
-        terms_text,
-        parse_mode=None,
-        disable_web_page_preview=True,
-    )
+    max_len = 3900
+    if len(terms_text) <= max_len:
+        await message.answer(
+            terms_text,
+            parse_mode=None,
+            disable_web_page_preview=True,
+        )
+    else:
+        for i in range(0, len(terms_text), max_len):
+            await message.answer(
+                terms_text[i : i + max_len],
+                parse_mode=None,
+                disable_web_page_preview=True,
+            )
 
     try:
         doc = FSInputFile(str(TERMS_FILE_PATH))
