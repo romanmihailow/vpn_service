@@ -2212,7 +2212,20 @@ async def cmd_ref(message: Message) -> None:
     lines.append("📊 <b>Сводка:</b>")
     lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
     lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
+
+    # Пустая строка перед уровнями
+    lines.append("")
+
+    # Блок уровней 2–5 в формате: «приглашено / оплатили»
+    lines.append("Уровни 2–5 (приглашено / оплатили):")
+    for level in range(2, 6):
+        lvl_inv = invited_by_levels.get(level) or 0
+        lvl_paid = paid_by_levels.get(level) or 0
+        lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
+
     if is_admin(message):
+        lines.append("")
+        lines.append("🔧 <b>Админ:</b>")
         try:
             total_subscribers = db.get_total_subscribers_count()
         except Exception as e:
@@ -2225,15 +2238,17 @@ async def cmd_ref(message: Message) -> None:
         if total_subscribers is not None:
             lines.append(f"• Всего подписчиков: <b>{total_subscribers}</b>")
 
-    # Пустая строка перед уровнями
-    lines.append("")
-
-    # Блок уровней 2–5 в формате: «приглашено / оплатили»
-    lines.append("Уровни 2–5 (приглашено / оплатили):")
-    for level in range(2, 6):
-        lvl_inv = invited_by_levels.get(level) or 0
-        lvl_paid = paid_by_levels.get(level) or 0
-        lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
+        try:
+            promo_subscribers = db.get_active_promo_subscribers_count()
+        except Exception as e:
+            log.error(
+                "[Referral] Failed to get promo subscribers count for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            promo_subscribers = None
+        if promo_subscribers is not None:
+            lines.append(f"• Сейчас по промокодам: <b>{promo_subscribers}</b>")
 
     text = "\n".join(lines)
 

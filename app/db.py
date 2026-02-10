@@ -721,6 +721,29 @@ def get_total_subscribers_count() -> int:
             return int(row[0])
 
 
+def get_active_promo_subscribers_count() -> int:
+    """
+    Возвращает количество уникальных активных пользователей,
+    у которых текущая подписка связана с промокодом.
+    """
+    sql = """
+    SELECT COUNT(DISTINCT s.telegram_user_id) AS cnt
+    FROM vpn_subscriptions s
+    JOIN promo_code_usages u
+      ON u.subscription_id = s.id
+    WHERE s.telegram_user_id IS NOT NULL
+      AND s.active = TRUE
+      AND s.expires_at > NOW();
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return 0
+            return int(row[0])
+
+
 
 def get_latest_subscription_for_telegram(
     telegram_user_id: int,
