@@ -1,26 +1,81 @@
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from contextlib import contextmanager
+import contextvars
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 import json
 from .config import settings
 
 
+_ip_lock_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "ip_allocation_lock_ctx",
+    default=None,
+)
+
+
+_POOL = psycopg2.pool.ThreadedConnectionPool(
+    minconn=settings.DB_POOL_MIN,
+    maxconn=settings.DB_POOL_MAX,
+    host=settings.DB_HOST,
+    port=settings.DB_PORT,
+    dbname=settings.DB_NAME,
+    user=settings.DB_USER,
+    password=settings.DB_PASSWORD,
+    sslmode="disable",
+)
+
+
+def acquire_ip_allocation_lock() -> None:
+    ctx = _ip_lock_ctx.get()
+    if ctx is not None:
+        ctx["count"] += 1
+        return
+
+    conn = _POOL.getconn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_advisory_lock(%s);", (settings.DB_IP_ALLOC_LOCK_ID,))
+    _ip_lock_ctx.set({"conn": conn, "count": 1})
+
+
+def release_ip_allocation_lock() -> None:
+    ctx = _ip_lock_ctx.get()
+    if ctx is None:
+        return
+
+    ctx["count"] -= 1
+    if ctx["count"] > 0:
+        return
+
+    conn = ctx["conn"]
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_unlock(%s);", (settings.DB_IP_ALLOC_LOCK_ID,))
+    finally:
+        _POOL.putconn(conn)
+        _ip_lock_ctx.set(None)
+
+
 @contextmanager
 def get_conn():
-    conn = psycopg2.connect(
-        host=settings.DB_HOST,
-        port=settings.DB_PORT,
-        dbname=settings.DB_NAME,
-        user=settings.DB_USER,
-        password=settings.DB_PASSWORD,
-        sslmode="disable",  # добавили эту строчку
-    )
+    ctx = _ip_lock_ctx.get()
+    if ctx is not None:
+        conn = ctx["conn"]
+        try:
+            yield conn
+        finally:
+            pass
+        return
+
+    conn = _POOL.getconn()
     try:
         yield conn
     finally:
-        conn.close()
+        try:
+            conn.rollback()
+        finally:
+            _POOL.putconn(conn)
 
 
 def init_db() -> None:
@@ -303,27 +358,30 @@ def insert_subscription(
     RETURNING id;
     """
     with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                (
-                    tribute_user_id,
-                    telegram_user_id,
-                    telegram_user_name,
-                    subscription_id,
-                    period_id,
-                    period,
-                    channel_id,
-                    channel_name,
-                    vpn_ip,
-                    wg_private_key,
-                    wg_public_key,
-                    expires_at,
-                    event_name,
-                ),
-            )
-            row = cur.fetchone()
-        conn.commit()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        tribute_user_id,
+                        telegram_user_id,
+                        telegram_user_name,
+                        subscription_id,
+                        period_id,
+                        period,
+                        channel_id,
+                        channel_name,
+                        vpn_ip,
+                        wg_private_key,
+                        wg_public_key,
+                        expires_at,
+                        event_name,
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        finally:
+            release_ip_allocation_lock()
 
     if not row:
         raise RuntimeError("Failed to insert subscription and get id")

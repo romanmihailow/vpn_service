@@ -13,6 +13,9 @@ class Settings(BaseModel):
     DB_NAME: str = os.getenv("DB_NAME", "postgres")
     DB_USER: str = os.getenv("DB_USER", "postgres")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+    DB_POOL_MIN: int = int(os.getenv("DB_POOL_MIN", "1"))
+    DB_POOL_MAX: int = int(os.getenv("DB_POOL_MAX", "10"))
+    DB_IP_ALLOC_LOCK_ID: int = int(os.getenv("DB_IP_ALLOC_LOCK_ID", "4242001"))
 
     WG_INTERFACE_NAME: str = os.getenv("WG_INTERFACE_NAME", "wg0")
     WG_SERVER_PUBLIC_KEY: str = os.getenv("WG_SERVER_PUBLIC_KEY", "")
@@ -20,6 +23,7 @@ class Settings(BaseModel):
     WG_CLIENT_NETWORK_PREFIX: str = os.getenv("WG_CLIENT_NETWORK_PREFIX", "10.8.0.")
     WG_CLIENT_NETWORK_CIDR: int = int(os.getenv("WG_CLIENT_NETWORK_CIDR", "24"))
     WG_CLIENT_IP_START: int = int(os.getenv("WG_CLIENT_IP_START", "10"))
+    WG_CONFIG_LOCK_PATH: str = os.getenv("WG_CONFIG_LOCK_PATH", "/tmp/wg0.conf.lock")
 
     TRIBUTE_WEBHOOK_SECRET: str = os.getenv("TRIBUTE_WEBHOOK_SECRET", "")
     YOOKASSA_WEBHOOK_SECRET: str = os.getenv("YOOKASSA_WEBHOOK_SECRET", "")
