@@ -23,7 +23,6 @@ def get_conn():
         conn.close()
 
 
-
 def init_db() -> None:
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS vpn_subscriptions (
@@ -217,8 +216,6 @@ def init_db() -> None:
         with conn.cursor() as cur:
             cur.execute(create_table_sql)
         conn.commit()
-
-
 
 
 def get_active_subscription(
