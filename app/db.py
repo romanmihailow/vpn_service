@@ -112,6 +112,18 @@ def init_db() -> None:
         ON vpn_subscriptions (tribute_user_id, period_id, channel_id);
 
     --------------------------------------------------------------------
+    -- Пул IP-адресов WireGuard
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS vpn_ip_pool (
+        ip INET PRIMARY KEY,
+        allocated BOOLEAN NOT NULL DEFAULT FALSE,
+        allocated_at TIMESTAMPTZ
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_vpn_ip_pool_allocated
+        ON vpn_ip_pool (allocated);
+
+    --------------------------------------------------------------------
     -- Таблица тарифов
     --------------------------------------------------------------------
     CREATE TABLE IF NOT EXISTS tariffs (
@@ -640,6 +652,65 @@ def is_vpn_ip_used(vpn_ip: str) -> bool:
             cur.execute(sql, (vpn_ip,))
             row = cur.fetchone()
             return row is not None
+
+
+def allocate_free_ip_from_pool() -> str:
+    """
+    Атомарно выделяет свободный IP из vpn_ip_pool.
+    Использует SELECT ... FOR UPDATE SKIP LOCKED.
+    """
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ip
+                    FROM vpn_ip_pool
+                    WHERE allocated = FALSE
+                    ORDER BY ip
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED;
+                    """
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("No free VPN IPs left in pool")
+
+                ip_value = row[0]
+
+                cur.execute(
+                    """
+                    UPDATE vpn_ip_pool
+                    SET allocated = TRUE,
+                        allocated_at = NOW()
+                    WHERE ip = %s;
+                    """,
+                    (ip_value,),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return str(ip_value)
+
+
+def release_ip_in_pool(ip: str) -> None:
+    """
+    Освобождает IP в пуле, если он был выделен.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vpn_ip_pool
+                SET allocated = FALSE,
+                    allocated_at = NULL
+                WHERE ip = %s;
+                """,
+                (ip,),
+            )
+        conn.commit()
 
 
 def get_last_subscriptions(limit: int = 50):

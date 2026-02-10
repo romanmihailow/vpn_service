@@ -583,6 +583,10 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             telegram_user_id=telegram_user_id,
         )
     except Exception as e:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
         log.error(
             "[HeleketWebhook] failed to add peer to WireGuard for tg_id=%s: %r",
             telegram_user_id,
@@ -666,6 +670,10 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             )
 
     except Exception as e:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
         log.error(
             "[HeleketWebhook] failed to insert subscription for tg_id=%s: %r",
             telegram_user_id,

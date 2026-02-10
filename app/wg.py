@@ -2,7 +2,6 @@ import subprocess
 import os
 import tempfile
 import fcntl
-from ipaddress import ip_network, ip_address
 from typing import Tuple, Optional, Iterable
 from contextlib import contextmanager
 
@@ -18,6 +17,7 @@ WG_NETWORK_CIDR = "10.8.0.0/16"
 
 # IP сервера WireGuard, который нельзя выдавать клиентам
 WG_SERVER_IP = "10.8.0.1"
+
 
 
 @contextmanager
@@ -125,21 +125,7 @@ def generate_client_ip() -> str:
     db.acquire_ip_allocation_lock()
 
     try:
-        network = ip_network(WG_NETWORK_CIDR)
-        server_ip = ip_address(WG_SERVER_IP)
-
-        for ip in network.hosts():
-            if ip == server_ip:
-                continue
-
-            candidate_ip = str(ip)
-
-            # Проверяем в БД, что этот IP не используется в активной подписке
-            # ОЖИДАЕТСЯ, ЧТО В db.py ЕСТЬ ФУНКЦИЯ is_vpn_ip_used(ip: str) -> bool
-            if not db.is_vpn_ip_used(candidate_ip):
-                return candidate_ip
-
-        raise RuntimeError(f"No free VPN IPs left in {WG_NETWORK_CIDR}")
+        return db.allocate_free_ip_from_pool()
     except Exception:
         db.release_ip_allocation_lock()
         raise

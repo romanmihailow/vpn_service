@@ -89,6 +89,9 @@ async def try_give_referral_trial_7d(
     - у пользователя НЕТ активной подписки;
     - пользователь ЕЩЁ НЕ получал реферальный триал (last_event_name='referral_free_trial_7d').
     """
+    client_ip: Optional[str] = None
+    subscription_created = False
+
     try:
         # 1) Проверяем, нет ли уже активной подписки
         active_sub = db.get_latest_subscription_for_telegram(
@@ -152,6 +155,7 @@ async def try_give_referral_trial_7d(
             expires_at=expires_at,
             event_name="referral_free_trial_7d",
         )
+        subscription_created = True
 
         log.info(
             "[ReferralTrial] Trial subscription created: sub_id=%s tg_id=%s vpn_ip=%s expires_at=%s",
@@ -177,6 +181,11 @@ async def try_give_referral_trial_7d(
         )
 
     except Exception as e:
+        if client_ip and not subscription_created:
+            try:
+                db.release_ip_in_pool(client_ip)
+            except Exception:
+                pass
         log.error(
             "[ReferralTrial] Failed to issue referral trial for tg_id=%s: %r",
             telegram_user_id,
@@ -1848,6 +1857,8 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             reuse_ip = latest_sub.get("vpn_ip")
 
     # Выдаём подписку за баллы
+    allocated_new_ip = False
+    subscription_created = False
     try:
         client_priv = None
         client_pub = None
@@ -1890,6 +1901,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
 
             client_priv, client_pub = wg.generate_keypair()
             client_ip = wg.generate_client_ip()
+            allocated_new_ip = True
             allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
 
             log.info(
@@ -1922,6 +1934,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             expires_at=expires_at,
             event_name=f"points_payment_{tariff_code}",
         )
+        subscription_created = True
 
         log.info(
             "[PointsPay] Subscription created from points: sub_id=%s tg_id=%s ip=%s expires_at=%s",
@@ -2003,7 +2016,11 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
         )
 
     except Exception as e:
-
+        if allocated_new_ip and client_ip and not subscription_created:
+            try:
+                db.release_ip_in_pool(client_ip)
+            except Exception:
+                pass
         log.error(
             "[PointsPay] Failed to create subscription for tg_id=%s tariff=%s: %r",
             telegram_user_id,
@@ -2698,6 +2715,8 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                     reuse_ip = latest_sub.get("vpn_ip")
 
             # Пытаемся создать новую подписку (с реюзом конфига, если он есть)
+            allocated_new_ip = False
+            subscription_created = False
             try:
                 # На всякий случай выключим все активные подписки (если вдруг что-то есть)
                 deactivate_existing_active_subscriptions(
@@ -2730,6 +2749,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                 else:
                     client_priv, client_pub = wg.generate_keypair()
                     client_ip = wg.generate_client_ip()
+                    allocated_new_ip = True
                     allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
 
                     log.info(
@@ -2765,6 +2785,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                     expires_at=expires_at,
                     event_name="promo_new_subscription",
                 )
+                subscription_created = True
 
                 # если знаем usage_id — линкуем usage к созданной подписке
                 if usage_id is not None:
@@ -2804,6 +2825,11 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                     )
 
             except Exception as e:
+                if allocated_new_ip and client_ip and not subscription_created:
+                    try:
+                        db.release_ip_in_pool(client_ip)
+                    except Exception:
+                        pass
                 log.error(
                     "[PromoApply] Failed to create new subscription from promo for tg_id=%s: %r",
                     user.id,
@@ -4034,6 +4060,10 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             telegram_user_id=target_id,
         )
     except Exception as e:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
         log.error(
             "[TelegramAdmin] Failed to add peer (manual) to WireGuard for tg_id=%s: %s",
             target_id,
@@ -4068,6 +4098,10 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             expires_at,
         )
     except Exception as e:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
         log.error(
             "[DB] Failed to insert manual subscription for tg_id=%s: %s",
             target_id,

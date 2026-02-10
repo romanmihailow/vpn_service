@@ -171,30 +171,44 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
     allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
 
     # 2. Добавляем peer в WireGuard
-    wg.add_peer(
-        public_key=client_pub,
-        allowed_ip=allowed_ip,
-        telegram_user_id=telegram_user_id,
-    )
+    try:
+        wg.add_peer(
+            public_key=client_pub,
+            allowed_ip=allowed_ip,
+            telegram_user_id=telegram_user_id,
+        )
+    except Exception:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
+        raise
 
 
 
     # Записываем в БД
-    db.insert_subscription(
-        tribute_user_id=tribute_user_id,
-        telegram_user_id=telegram_user_id,
-        telegram_user_name=telegram_user_name,
-        subscription_id=subscription_id,
-        period_id=period_id,
-        period=period,
-        channel_id=channel_id,
-        channel_name=channel_name,
-        vpn_ip=client_ip,
-        wg_private_key=client_priv,
-        wg_public_key=client_pub,
-        expires_at=expires_at,
-        event_name="new_subscription",
-    )
+    try:
+        db.insert_subscription(
+            tribute_user_id=tribute_user_id,
+            telegram_user_id=telegram_user_id,
+            telegram_user_name=telegram_user_name,
+            subscription_id=subscription_id,
+            period_id=period_id,
+            period=period,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            vpn_ip=client_ip,
+            wg_private_key=client_priv,
+            wg_public_key=client_pub,
+            expires_at=expires_at,
+            event_name="new_subscription",
+        )
+    except Exception:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
+        raise
 
 
 
@@ -356,29 +370,43 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
     allowed_ip = f"{client_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
 
     # 2. Добавляем peer в WireGuard
-    wg.add_peer(
-        public_key=client_pub,
-        allowed_ip=allowed_ip,
-        telegram_user_id=telegram_user_id,
-    )
+    try:
+        wg.add_peer(
+            public_key=client_pub,
+            allowed_ip=allowed_ip,
+            telegram_user_id=telegram_user_id,
+        )
+    except Exception:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
+        raise
 
 
     # 3. Пишем в БД (используем уже существующую функцию)
-    db.insert_subscription(
-        tribute_user_id=tribute_user_id,
-        telegram_user_id=telegram_user_id,
-        telegram_user_name=telegram_user_name,
-        subscription_id=subscription_id,
-        period_id=period_id,
-        period=period,
-        channel_id=channel_id,
-        channel_name=channel_name,
-        vpn_ip=client_ip,
-        wg_private_key=client_priv,
-        wg_public_key=client_pub,
-        expires_at=expires_at,
-        event_name="new_donation",
-    )
+    try:
+        db.insert_subscription(
+            tribute_user_id=tribute_user_id,
+            telegram_user_id=telegram_user_id,
+            telegram_user_name=telegram_user_name,
+            subscription_id=subscription_id,
+            period_id=period_id,
+            period=period,
+            channel_id=channel_id,
+            channel_name=channel_name,
+            vpn_ip=client_ip,
+            wg_private_key=client_priv,
+            wg_public_key=client_pub,
+            expires_at=expires_at,
+            event_name="new_donation",
+        )
+    except Exception:
+        try:
+            db.release_ip_in_pool(client_ip)
+        except Exception:
+            pass
+        raise
 
 
 
