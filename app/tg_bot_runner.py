@@ -2212,6 +2212,18 @@ async def cmd_ref(message: Message) -> None:
     lines.append("📊 <b>Сводка:</b>")
     lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
     lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
+    if is_admin(message):
+        try:
+            total_subscribers = db.get_total_subscribers_count()
+        except Exception as e:
+            log.error(
+                "[Referral] Failed to get total subscribers count for tg_id=%s: %r",
+                telegram_user_id,
+                e,
+            )
+            total_subscribers = None
+        if total_subscribers is not None:
+            lines.append(f"• Всего подписчиков: <b>{total_subscribers}</b>")
 
     # Пустая строка перед уровнями
     lines.append("")

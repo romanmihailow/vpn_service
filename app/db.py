@@ -703,6 +703,24 @@ def get_all_telegram_users() -> List[Dict[str, Any]]:
             return rows
 
 
+def get_total_subscribers_count() -> int:
+    """
+    Возвращает количество уникальных Telegram-пользователей в подписках.
+    """
+    sql = """
+    SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+    FROM vpn_subscriptions
+    WHERE telegram_user_id IS NOT NULL;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+            if not row or row[0] is None:
+                return 0
+            return int(row[0])
+
+
 
 def get_latest_subscription_for_telegram(
     telegram_user_id: int,
