@@ -936,6 +936,7 @@ ADMIN_INFO_TEXT = (
     "/admin_activate &lt;id&gt; — активировать подписку и добавить peer в WireGuard.\n"
     "/admin_deactivate &lt;id&gt; — деактивировать подписку и удалить peer.\n"
     "/admin_delete &lt;id&gt; — полностью удалить подписку из БД и из WireGuard.\n\n"
+    "/admin_regenerate_vpn &lt;telegram_user_id&gt; — восстановить VPN-доступ: новые ключи WG, тот же IP, конфиг отправить пользователю в TG.\n\n"
     "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
     "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки.\n\n"
     "/broadcast — отправить текстовую рассылку всем пользователям.\n\n"
@@ -3998,6 +3999,153 @@ async def cmd_admin_delete(message: Message) -> None:
         f"Peer в WireGuard удалён (если был).",
         disable_web_page_preview=True,
     )
+
+
+@router.message(Command("admin_regenerate_vpn"))
+async def cmd_admin_regenerate_vpn(message: Message) -> None:
+    """
+    Восстановление VPN-доступа по Telegram ID: новые WG-ключи, тот же IP,
+    конфиг отправляется пользователю в Telegram.
+    """
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        await message.answer(
+            "Использование: /admin_regenerate_vpn <telegram_user_id>\n"
+            "Пример: /admin_regenerate_vpn 8519013399",
+            disable_web_page_preview=True,
+        )
+        return
+
+    try:
+        telegram_user_id = int(parts[1])
+    except ValueError:
+        await message.answer("telegram_user_id должен быть числом.")
+        return
+
+    sub = db.get_latest_subscription_for_telegram(telegram_user_id=telegram_user_id)
+    if not sub:
+        await message.answer(
+            f"У пользователя {telegram_user_id} нет активной подписки "
+            "(active = true и expires_at > now).",
+            disable_web_page_preview=True,
+        )
+        return
+
+    sub_id = sub["id"]
+    old_public_key = sub.get("wg_public_key")
+    vpn_ip = sub.get("vpn_ip")
+    if not vpn_ip or not old_public_key:
+        await message.answer(
+            f"Подписка id={sub_id}: нет vpn_ip или wg_public_key, восстановление невозможно.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    try:
+        new_private_key, new_public_key = await asyncio.to_thread(wg.generate_keypair)
+        log.info(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: new keys generated",
+            telegram_user_id,
+            sub_id,
+        )
+    except Exception as e:
+        log.error("[AdminRegenerateVPN] tg_id=%s generate_keypair failed: %r", telegram_user_id, e)
+        await message.answer(f"Ошибка генерации ключей: {e!r}")
+        return
+
+    db.update_subscription_wg_keys(
+        sub_id=sub_id,
+        wg_private_key=new_private_key,
+        wg_public_key=new_public_key,
+    )
+    log.info(
+        "[AdminRegenerateVPN] tg_id=%s sub_id=%s: keys updated in DB",
+        telegram_user_id,
+        sub_id,
+    )
+
+    try:
+        await asyncio.to_thread(wg.remove_peer, old_public_key)
+        log.info(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: old peer removed",
+            telegram_user_id,
+            sub_id,
+        )
+    except Exception as e:
+        log.info(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: remove old peer skipped (peer absent or error): %r",
+            telegram_user_id,
+            sub_id,
+            e,
+        )
+
+    allowed_ip = f"{vpn_ip}/{settings.WG_CLIENT_NETWORK_CIDR}"
+    try:
+        await asyncio.to_thread(
+            wg.add_peer,
+            new_public_key,
+            allowed_ip,
+            telegram_user_id,
+        )
+        log.info(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: new peer added ip=%s",
+            telegram_user_id,
+            sub_id,
+            allowed_ip,
+        )
+    except Exception as e:
+        log.error(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s add_peer failed: %r",
+            telegram_user_id,
+            sub_id,
+            e,
+        )
+        await message.answer(
+            f"Ключи в БД обновлены, но не удалось добавить peer в WireGuard: {e!r}. "
+            "Проверьте логи и wg0.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    config_text = wg.build_client_config(
+        client_private_key=new_private_key,
+        client_ip=vpn_ip,
+    )
+    try:
+        await send_vpn_config_to_user(
+            telegram_user_id=telegram_user_id,
+            config_text=config_text,
+            caption="Восстановленный доступ к MaxNet VPN. Новый конфиг WireGuard и QR-код.",
+        )
+        log.info(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: config sent to user",
+            telegram_user_id,
+            sub_id,
+        )
+    except Exception as e:
+        log.warning(
+            "[AdminRegenerateVPN] tg_id=%s sub_id=%s: failed to send config to user: %r",
+            telegram_user_id,
+            sub_id,
+            e,
+        )
+        await message.answer(
+            f"VPN доступ восстановлен (ключи и peer обновлены). "
+            f"Не удалось отправить конфиг пользователю в TG: {e!r}",
+            disable_web_page_preview=True,
+        )
+        return
+
+    await message.answer(
+        f"Готово. Пользователь {telegram_user_id} (sub_id={sub_id}, ip={vpn_ip}): "
+        "новые ключи, peer обновлён, конфиг отправлен в Telegram.",
+        disable_web_page_preview=True,
+    )
+
 
 # Обработчик кнопок "✅ Выдать демо-доступ" / "❌ Отказать"
 @router.callback_query(F.data.startswith("demo:"))

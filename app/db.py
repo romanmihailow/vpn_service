@@ -474,6 +474,27 @@ def update_subscription_expiration(
         conn.commit()
 
 
+def update_subscription_wg_keys(
+    sub_id: int,
+    wg_private_key: str,
+    wg_public_key: str,
+) -> None:
+    """
+    Обновляет WireGuard-ключи у подписки по id.
+    Используется при восстановлении доступа (admin_regenerate_vpn).
+    """
+    sql = """
+    UPDATE vpn_subscriptions
+    SET wg_private_key = %s,
+        wg_public_key = %s
+    WHERE id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (wg_private_key, wg_public_key, sub_id))
+        conn.commit()
+
+
 def deactivate_subscriptions_for_period(
     tribute_user_id: int,
     period_id: int,
