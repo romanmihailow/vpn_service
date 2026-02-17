@@ -5169,6 +5169,7 @@ async def auto_deactivate_expired_subscriptions() -> None:
                 for sub in expired_subs:
                     sub_id = sub.get("id")
                     pub_key = sub.get("wg_public_key")
+                    vpn_ip = sub.get("vpn_ip")
 
                     if not sub_id:
                         continue
@@ -5197,6 +5198,18 @@ async def auto_deactivate_expired_subscriptions() -> None:
                                 repr(e),
                             )
 
+                    # Возвращаем IP в пул, чтобы его мог получить новый пользователь
+                    if vpn_ip:
+                        try:
+                            db.release_ip_in_pool(vpn_ip)
+                        except Exception as e:
+                            log.error(
+                                "[AutoExpire] Failed to release IP %s for sub_id=%s: %s",
+                                vpn_ip,
+                                sub_id,
+                                repr(e),
+                            )
+
             except Exception as e:
                 log.error(
                     "[AutoExpire] Unexpected error in auto_deactivate_expired_subscriptions: %s",
@@ -5207,6 +5220,74 @@ async def auto_deactivate_expired_subscriptions() -> None:
             await asyncio.sleep(60)
     finally:
         db.release_job_lock(settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED)
+
+
+# Отзыв неиспользованных промо-баллов (например never_connected_100) через N дней
+REVOKE_UNUSED_PROMO_CAMPAIGN = "never_connected_100"
+REVOKE_UNUSED_PROMO_AFTER_DAYS = 30
+REVOKE_UNUSED_PROMO_POINTS = 100
+REVOKE_REASON = "promo_revoke"
+REVOKE_SOURCE = "admin"
+
+
+async def auto_revoke_unused_promo_points() -> None:
+    """
+    Раз в сутки ищет пользователей, которым 30+ дней назад начислили промо-баллы
+    по кампании never_connected_100 и которые так и не потратили баллы.
+    Списывает у них 100 баллов (отзыв неиспользованного бонуса).
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO):
+        log.info("[RevokePromo] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                users = db.get_users_with_unused_promo_to_revoke(
+                    campaign=REVOKE_UNUSED_PROMO_CAMPAIGN,
+                    after_days=REVOKE_UNUSED_PROMO_AFTER_DAYS,
+                    min_balance_to_revoke=REVOKE_UNUSED_PROMO_POINTS,
+                )
+                for row in users:
+                    uid = row.get("telegram_user_id")
+                    if not uid:
+                        continue
+                    res = db.add_points(
+                        uid,
+                        -REVOKE_UNUSED_PROMO_POINTS,
+                        REVOKE_REASON,
+                        REVOKE_SOURCE,
+                        meta={
+                            "campaign": REVOKE_UNUSED_PROMO_CAMPAIGN,
+                            "revoke_after_days": REVOKE_UNUSED_PROMO_AFTER_DAYS,
+                        },
+                        allow_negative=False,
+                    )
+                    if res.get("ok"):
+                        log.info(
+                            "[RevokePromo] Revoked %s points from tg_id=%s (unused after %s days)",
+                            REVOKE_UNUSED_PROMO_POINTS,
+                            uid,
+                            REVOKE_UNUSED_PROMO_AFTER_DAYS,
+                        )
+                    else:
+                        log.warning(
+                            "[RevokePromo] Failed to revoke for tg_id=%s: %s",
+                            uid,
+                            res.get("error"),
+                        )
+                if users:
+                    log.info("[RevokePromo] Processed %s users", len(users))
+            except Exception as e:
+                log.error(
+                    "[RevokePromo] Unexpected error in auto_revoke_unused_promo_points: %s",
+                    repr(e),
+                )
+
+            # Проверяем раз в 24 часа
+            await asyncio.sleep(86400)
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
 
 
 async def main() -> None:
@@ -5233,6 +5314,7 @@ async def main() -> None:
     # запускаем фоновые воркеры
     asyncio.create_task(auto_deactivate_expired_subscriptions())
     asyncio.create_task(auto_notify_expiring_subscriptions(bot))
+    asyncio.create_task(auto_revoke_unused_promo_points())
 
     app = create_app()
     runner = web.AppRunner(app)

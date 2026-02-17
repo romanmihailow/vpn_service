@@ -887,12 +887,15 @@ def get_all_telegram_users() -> List[Dict[str, Any]]:
 
 def get_total_subscribers_count() -> int:
     """
-    Возвращает количество уникальных Telegram-пользователей в подписках.
+    Возвращает количество уникальных Telegram-пользователей с активной подпиской
+    (active = TRUE и expires_at > NOW()).
     """
     sql = """
     SELECT COUNT(DISTINCT telegram_user_id) AS cnt
     FROM vpn_subscriptions
-    WHERE telegram_user_id IS NOT NULL;
+    WHERE telegram_user_id IS NOT NULL
+      AND active = TRUE
+      AND expires_at > NOW();
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -1648,7 +1651,54 @@ def get_user_points_last_transactions(
             rows = cur.fetchall()
             return list(rows)
 
-        
+
+def get_users_with_unused_promo_to_revoke(
+    campaign: str = "never_connected_100",
+    after_days: int = 30,
+    min_balance_to_revoke: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает пользователей, которым больше after_days дней назад начислили
+    промо-баллы по кампании campaign, они не тратили баллы после начисления
+    и у них сейчас баланс >= min_balance_to_revoke (чтобы можно было списать 100).
+
+    Используется для автоматического отзыва неиспользованных бонусов через 30 дней.
+    """
+    sql = """
+    WITH bonus AS (
+        SELECT telegram_user_id, id AS bonus_tx_id, created_at AS bonus_at
+        FROM user_points_transactions
+        WHERE reason = 'promo' AND source = 'admin'
+          AND meta->>'campaign' = %s
+          AND delta = 100
+          AND created_at < NOW() - (%s || ' days')::interval
+    ),
+    with_spending AS (
+        SELECT b.telegram_user_id
+        FROM bonus b
+        WHERE EXISTS (
+            SELECT 1 FROM user_points_transactions t
+            WHERE t.telegram_user_id = b.telegram_user_id
+              AND t.delta < 0
+              AND t.created_at > b.bonus_at
+        )
+    )
+    SELECT b.telegram_user_id, b.bonus_at
+    FROM bonus b
+    WHERE b.telegram_user_id NOT IN (SELECT telegram_user_id FROM with_spending)
+      AND EXISTS (
+        SELECT 1 FROM user_points up
+        WHERE up.telegram_user_id = b.telegram_user_id
+          AND up.balance >= %s
+      )
+    ORDER BY b.bonus_at;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (campaign, after_days, min_balance_to_revoke))
+            return list(cur.fetchall())
+
+
 def link_promo_usage_to_subscription(
     usage_id: int,
     subscription_id: int,
