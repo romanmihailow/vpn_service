@@ -929,6 +929,119 @@ def get_active_promo_subscribers_count() -> int:
             return int(row[0])
 
 
+def get_referral_admin_stats() -> Dict[str, Any]:
+    """
+    Сводка для админа в блоке /ref: активные подписчики, по промо, всего когда-либо,
+    новые за сегодня, оплатившие vs триал/промо.
+    """
+    result: Dict[str, Any] = {
+        "active_subscribers": 0,
+        "promo_subscribers": 0,
+        "total_unique_ever": 0,
+        "new_active_today": 0,
+        "paid_active": 0,
+        "trial_promo_active": 0,
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Активные (уникальные пользователи с активной подпиской)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+                FROM vpn_subscriptions
+                WHERE telegram_user_id IS NOT NULL
+                  AND active = TRUE
+                  AND expires_at > NOW();
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["active_subscribers"] = int(row[0])
+
+            # По промокодам (активные)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT s.telegram_user_id) AS cnt
+                FROM vpn_subscriptions s
+                JOIN promo_code_usages u ON u.subscription_id = s.id
+                WHERE s.telegram_user_id IS NOT NULL
+                  AND s.active = TRUE
+                  AND s.expires_at > NOW();
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["promo_subscribers"] = int(row[0])
+
+            # Всего уникальных пользователей когда-либо (хотя бы одна подписка)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+                FROM vpn_subscriptions
+                WHERE telegram_user_id IS NOT NULL;
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["total_unique_ever"] = int(row[0])
+
+            # Новые за сегодня (уникальные пользователи с активной подпиской, созданной сегодня)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+                FROM vpn_subscriptions
+                WHERE telegram_user_id IS NOT NULL
+                  AND active = TRUE
+                  AND expires_at > NOW()
+                  AND created_at >= CURRENT_DATE
+                  AND created_at < CURRENT_DATE + 1;
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["new_active_today"] = int(row[0])
+
+            # Оплатившие (активная подписка с оплатой: юкасса, heleket, баллы)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+                FROM vpn_subscriptions
+                WHERE telegram_user_id IS NOT NULL
+                  AND active = TRUE
+                  AND expires_at > NOW()
+                  AND (
+                    last_event_name LIKE 'yookassa_payment_succeeded_%%'
+                    OR last_event_name LIKE 'heleket_payment_paid_%%'
+                    OR last_event_name LIKE 'points_payment_%%'
+                    OR last_event_name LIKE 'points_extend_%%'
+                  );
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["paid_active"] = int(row[0])
+
+            # Триал/промо активные (реферальный триал или промо-подписка)
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT telegram_user_id) AS cnt
+                FROM vpn_subscriptions
+                WHERE telegram_user_id IS NOT NULL
+                  AND active = TRUE
+                  AND expires_at > NOW()
+                  AND (
+                    last_event_name = 'referral_free_trial_7d'
+                    OR last_event_name LIKE 'promo%%'
+                  );
+                """
+            )
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                result["trial_promo_active"] = int(row[0])
+
+    return result
+
+
 def get_admin_stats() -> Dict[str, int]:
     """
     Возвращает сводную статистику для админ-диагностики IP-пула и подписок.

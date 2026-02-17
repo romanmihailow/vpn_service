@@ -2356,28 +2356,30 @@ async def cmd_ref(message: Message) -> None:
         lines.append("")
         lines.append("🔧 <b>Админ:</b>")
         try:
-            total_subscribers = db.get_total_subscribers_count()
+            stats = db.get_referral_admin_stats()
         except Exception as e:
             log.error(
-                "[Referral] Failed to get total subscribers count for tg_id=%s: %r",
+                "[Referral] Failed to get referral admin stats for tg_id=%s: %r",
                 telegram_user_id,
                 e,
             )
-            total_subscribers = None
-        if total_subscribers is not None:
-            lines.append(f"• Всего подписчиков: <b>{total_subscribers}</b>")
-
-        try:
-            promo_subscribers = db.get_active_promo_subscribers_count()
-        except Exception as e:
-            log.error(
-                "[Referral] Failed to get promo subscribers count for tg_id=%s: %r",
-                telegram_user_id,
-                e,
+            stats = {}
+        if stats:
+            lines.append(
+                f"• Активных подписчиков: <b>{stats.get('active_subscribers', 0)}</b>"
             )
-            promo_subscribers = None
-        if promo_subscribers is not None:
-            lines.append(f"• Сейчас по промокодам: <b>{promo_subscribers}</b>")
+            lines.append(
+                f"• По промокодам: <b>{stats.get('promo_subscribers', 0)}</b>"
+            )
+            lines.append(
+                f"• Всего когда-либо: <b>{stats.get('total_unique_ever', 0)}</b>"
+            )
+            lines.append(
+                f"• Новых за сегодня: <b>{stats.get('new_active_today', 0)}</b>"
+            )
+            lines.append(
+                f"• Оплатили / триал+промо: <b>{stats.get('paid_active', 0)}</b> / <b>{stats.get('trial_promo_active', 0)}</b>"
+            )
 
     text = "\n".join(lines)
 
