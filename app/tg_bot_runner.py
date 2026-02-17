@@ -1,4 +1,5 @@
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -273,6 +274,18 @@ class DemoRequest(StatesGroup):
 
 
 class Broadcast(StatesGroup):
+    waiting_for_text = State()
+
+
+class BroadcastList(StatesGroup):
+    """Рассылка по списку ID из файла (например, пользователи без handshake)."""
+    waiting_for_file = State()
+    waiting_for_text = State()
+
+
+class BonusList(StatesGroup):
+    """Начислить 100 баллов каждому из списка ID и отправить сообщение."""
+    waiting_for_file = State()
     waiting_for_text = State()
 
 
@@ -939,7 +952,9 @@ ADMIN_INFO_TEXT = (
     "/admin_regenerate_vpn &lt;telegram_user_id&gt; — восстановить VPN-доступ: новые ключи WG, тот же IP, конфиг отправить пользователю в TG.\n\n"
     "/add_sub — выдать подписку вручную (подарок/ручной доступ).\n"
     "После /add_sub бот попросит переслать сообщение от пользователя и выбрать срок подписки.\n\n"
-    "/broadcast — отправить текстовую рассылку всем пользователям.\n\n"
+    "/broadcast — отправить текстовую рассылку всем пользователям.\n"
+    "/broadcast_list — рассылка по списку ID из файла (один telegram_user_id на строку).\n"
+    "/bonus_list — файл с ID: каждому +100 баллов и отправка сообщения.\n\n"
     "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes.\n\n"
     "/admin_stats — диагностика IP-пула и активных подписок."
 )
@@ -3317,7 +3332,252 @@ async def broadcast_send(message: Message, state: FSMContext) -> None:
         f"Ошибок: {failed}",
         disable_web_page_preview=True,
     )
-    
+
+
+@router.message(Command("broadcast_list"))
+async def cmd_broadcast_list(message: Message, state: FSMContext) -> None:
+    """Рассылка по списку telegram_user_id из файла (например, 155 пользователей без handshake)."""
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+    await state.clear()
+    await state.set_state(BroadcastList.waiting_for_file)
+    await message.answer(
+        "Пришли файл (.txt), в котором на каждой строке — один <code>telegram_user_id</code>.\n\n"
+        "Можно выгрузить список из БД и сохранить в текстовый файл.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(BroadcastList.waiting_for_file, F.document)
+async def broadcast_list_file(message: Message, state: FSMContext) -> None:
+    if not message.document or not message.bot:
+        return
+    try:
+        file = await message.bot.get_file(message.document.file_id)
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        buf.seek(0)
+        raw = buf.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        log.error("[BroadcastList] Failed to download file: %s", repr(e))
+        await message.answer("Не удалось прочитать файл. Пришли другой файл.")
+        return
+
+    ids: List[int] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ids.append(int(line))
+        except ValueError:
+            continue
+
+    if not ids:
+        await message.answer("В файле не найдено ни одного числового ID. Пришли другой файл.")
+        return
+
+    await state.update_data(broadcast_list_ids=ids)
+    await state.set_state(BroadcastList.waiting_for_text)
+    await message.answer(
+        f"Принято <b>{len(ids)}</b> ID. Теперь пришли текст сообщения одной штукой.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(BroadcastList.waiting_for_text, F.text)
+async def broadcast_list_send(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await state.clear()
+        return
+    data = await state.get_data()
+    ids: List[int] = data.get("broadcast_list_ids") or []
+    await state.clear()
+
+    if not ids:
+        await message.answer("Список ID потерян. Начни заново: /broadcast_list")
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст пустой, рассылку отменяю.")
+        return
+
+    total = len(ids)
+    if total > MAX_BROADCAST_USERS:
+        ids = ids[:MAX_BROADCAST_USERS]
+        total = len(ids)
+        await message.answer(f"Список обрезан до {total} пользователей.")
+
+    success = 0
+    failed = 0
+    batch_count = 0
+
+    await message.answer(
+        f"Начинаю рассылку по {total} пользователям...",
+        disable_web_page_preview=True,
+    )
+
+    for chat_id in ids:
+        ok = await safe_send_message(
+            bot=message.bot,
+            chat_id=chat_id,
+            text=text,
+            disable_web_page_preview=True,
+        )
+        if ok:
+            success += 1
+        else:
+            failed += 1
+        batch_count += 1
+        if batch_count >= BROADCAST_BATCH_SIZE:
+            await asyncio.sleep(BROADCAST_BATCH_SLEEP)
+            batch_count = 0
+
+    await message.answer(
+        f"Рассылка по списку завершена.\nУспешно: {success}\nОшибок: {failed}",
+        disable_web_page_preview=True,
+    )
+
+
+# --- /bonus_list: начислить 100 баллов списку и отправить сообщение ---
+
+BONUS_LIST_POINTS = 100
+BONUS_LIST_REASON = "promo"
+BONUS_LIST_SOURCE = "admin"
+BONUS_LIST_META = {"campaign": "never_connected_100"}
+
+
+@router.message(Command("bonus_list"))
+async def cmd_bonus_list(message: Message, state: FSMContext) -> None:
+    """Начислить каждому из списка 100 баллов и отправить сообщение (например, 155 юзерам без handshake)."""
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+    await state.clear()
+    await state.set_state(BonusList.waiting_for_file)
+    await message.answer(
+        "Пришли файл (.txt) с одним <code>telegram_user_id</code> на строку.\n\n"
+        f"Каждому будет начислено <b>{BONUS_LIST_POINTS} баллов</b> и отправлено твоё сообщение.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(BonusList.waiting_for_file, F.document)
+async def bonus_list_file(message: Message, state: FSMContext) -> None:
+    if not message.document or not message.bot:
+        return
+    try:
+        file = await message.bot.get_file(message.document.file_id)
+        buf = io.BytesIO()
+        await message.bot.download_file(file.file_path, buf)
+        buf.seek(0)
+        raw = buf.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        log.error("[BonusList] Failed to download file: %s", repr(e))
+        await message.answer("Не удалось прочитать файл. Пришли другой файл.")
+        return
+
+    ids = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ids.append(int(line))
+        except ValueError:
+            continue
+
+    if not ids:
+        await message.answer("В файле не найдено ни одного числового ID. Пришли другой файл.")
+        return
+
+    await state.update_data(bonus_list_ids=ids)
+    await state.set_state(BonusList.waiting_for_text)
+    await message.answer(
+        f"Принято <b>{len(ids)}</b> ID. Каждому начислится {BONUS_LIST_POINTS} баллов.\n"
+        "Теперь пришли текст сообщения одной штукой.",
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
+@router.message(BonusList.waiting_for_text, F.text)
+async def bonus_list_send(message: Message, state: FSMContext) -> None:
+    if not is_admin(message):
+        await state.clear()
+        return
+    data = await state.get_data()
+    ids: List[int] = data.get("bonus_list_ids") or []
+    await state.clear()
+
+    if not ids:
+        await message.answer("Список ID потерян. Начни заново: /bonus_list")
+        return
+
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Текст пустой. Начислю баллы без сообщения? Пришли текст или /cancel.")
+        return
+
+    total = len(ids)
+    if total > MAX_BROADCAST_USERS:
+        ids = ids[:MAX_BROADCAST_USERS]
+        total = len(ids)
+        await message.answer(f"Список обрезан до {total} пользователей.")
+
+    points_ok = 0
+    points_fail = 0
+    msg_ok = 0
+    msg_fail = 0
+    batch_count = 0
+
+    await message.answer(
+        f"Начисляю {BONUS_LIST_POINTS} баллов и отправляю сообщение по {total} пользователям...",
+        disable_web_page_preview=True,
+    )
+
+    for chat_id in ids:
+        res = db.add_points(
+            chat_id,
+            BONUS_LIST_POINTS,
+            BONUS_LIST_REASON,
+            BONUS_LIST_SOURCE,
+            meta=BONUS_LIST_META,
+        )
+        if res.get("ok"):
+            points_ok += 1
+        else:
+            points_fail += 1
+
+        ok = await safe_send_message(
+            bot=message.bot,
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True,
+        )
+        if ok:
+            msg_ok += 1
+        else:
+            msg_fail += 1
+
+        batch_count += 1
+        if batch_count >= BROADCAST_BATCH_SIZE:
+            await asyncio.sleep(BROADCAST_BATCH_SLEEP)
+            batch_count = 0
+
+    await message.answer(
+        f"Готово.\n"
+        f"Баллы: начислено {points_ok}, ошибок {points_fail}.\n"
+        f"Сообщение: доставлено {msg_ok}, ошибок {msg_fail}.",
+        disable_web_page_preview=True,
+    )
+
 
 @router.message(Command("admin_last"))
 async def cmd_admin_last(message: Message) -> None:
