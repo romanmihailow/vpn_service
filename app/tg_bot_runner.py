@@ -4638,6 +4638,21 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         return
 
     if action == "approve":
+        # Проверяем, нет ли у пользователя уже активной подписки
+        existing_sub = db.get_latest_subscription_for_telegram(telegram_user_id=target_id)
+        if existing_sub:
+            expires_at = existing_sub.get("expires_at")
+            if isinstance(expires_at, datetime):
+                expires_str = expires_at.strftime("%Y-%m-%d %H:%M UTC")
+            else:
+                expires_str = str(expires_at)
+            await callback.message.edit_text(
+                f"⚠️ У пользователя <code>{target_id}</code> уже есть активная подписка до <b>{expires_str}</b>.\n\n"
+                "Демо-доступ не выдан.",
+            )
+            await callback.answer("У пользователя уже есть подписка", show_alert=True)
+            return
+
         target_username = None
         try:
             chat = await callback.bot.get_chat(target_id)
