@@ -677,26 +677,8 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
-                text="💰 Продлить криптой",
-                callback_data="heleket:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="📃 Тарифы",
-                callback_data="subscription:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
                 text="🤝 Пригласить друга",
                 callback_data="ref:open_from_notify",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="📱 Получить конфиг",
-                callback_data="config:resend",
             ),
         ],
     ]
