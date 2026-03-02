@@ -1173,8 +1173,38 @@ async def withdraw_open_callback(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "points:open")
 async def points_open_callback(callback: CallbackQuery) -> None:
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    # Получаем баланс пользователя
+    balance = db.get_user_points_balance(user.id)
+
+    # Находим минимальную стоимость тарифа
+    min_cost = None
+    for tariff in TARIFFS_POINTS.values():
+        cost = tariff.get("points_cost")
+        if cost is not None and (min_cost is None or cost < min_cost):
+            min_cost = cost
+
+    if min_cost is None:
+        min_cost = 100  # fallback
+
+    if balance < min_cost:
+        await callback.message.answer(
+            f"💰 Твой баланс: <b>{balance} баллов</b>\n\n"
+            f"❌ Недостаточно баллов для оплаты подписки.\n"
+            f"Минимальная стоимость: <b>{min_cost} баллов</b>.\n\n"
+            "Приглашай друзей по реферальной ссылке (/ref) и получай баллы за их оплаты!",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
     await callback.message.answer(
-        "Выбери тариф для оплаты баллами (игровой баланс):",
+        f"💰 Твой баланс: <b>{balance} баллов</b>\n\n"
+        "Выбери тариф для оплаты баллами:",
         reply_markup=POINTS_TARIFF_KEYBOARD,
         disable_web_page_preview=True,
     )
