@@ -4665,12 +4665,11 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         else:
             user_line = f"Пользователь с TG ID: <code>{target_id}</code>.\n\n"
 
-        await callback.message.answer(
-            "Запрос демо-доступа одобрен.\n\n" + user_line + "Выбери срок демо-подписки:",
+        await callback.message.edit_text(
+            "✅ Запрос демо-доступа одобрен.\n\n" + user_line + "Выбери срок демо-подписки:",
             reply_markup=keyboard,
-            disable_web_page_preview=True,
         )
-        await callback.answer("Выбери срок демо-подписки.")
+        await callback.answer()
         return
 
     if action == "deny":
@@ -4692,11 +4691,10 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         except Exception as e:
             log.error("[Demo] Failed to send deny message to user %s: %s", target_id, repr(e))
 
-        await callback.message.answer(
-            f"Отказ по демо-доступу для пользователя <code>{target_id}</code> отправлен.",
-            disable_web_page_preview=True,
+        await callback.message.edit_text(
+            f"❌ Отказ по демо-доступу для пользователя <code>{target_id}</code> отправлен.",
         )
-        await callback.answer("Отказ отправлен.")
+        await callback.answer()
         return
 
     await callback.answer("Неизвестное действие.", show_alert=True)
