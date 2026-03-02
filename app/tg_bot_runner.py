@@ -4654,12 +4654,8 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="1 месяц", callback_data="addsub:period:1m"),
-                    InlineKeyboardButton(text="3 месяца", callback_data="addsub:period:3m"),
-                ],
-                [
-                    InlineKeyboardButton(text="6 месяцев", callback_data="addsub:period:6m"),
-                    InlineKeyboardButton(text="1 год", callback_data="addsub:period:1y"),
+                    InlineKeyboardButton(text="3 дня", callback_data="addsub:period:3d"),
+                    InlineKeyboardButton(text="7 дней", callback_data="addsub:period:7d"),
                 ],
             ]
         )
@@ -4717,7 +4713,13 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
     _, _, period_code = parts
 
     # Определяем период подписки
-    if period_code == "1m":
+    if period_code == "3d":
+        days = 3
+        period_label = "3 дня"
+    elif period_code == "7d":
+        days = 7
+        period_label = "7 дней"
+    elif period_code == "1m":
         days = 30
         period_label = "1 месяц"
     elif period_code == "3m":
