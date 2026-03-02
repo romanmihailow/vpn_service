@@ -611,30 +611,12 @@ POINTS_TARIFF_KEYBOARD = build_tariff_keyboard_from_dict(
 )
 
 
-# Кнопки оплаты и промокода (без Tribute, Heleket и демо-запроса)
+# Главное меню
 SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🔐 Подключить VPN",
-                callback_data="pay:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🎮 Оплатить баллами",
-                callback_data="points:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🎟 Ввести промокод",
-                callback_data="promo:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="💳 Вывести",
+                text="💳 Вывести баллы",
                 callback_data="withdraw:open",
             ),
         ],
