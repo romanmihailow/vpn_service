@@ -1416,6 +1416,27 @@ def has_referral_trial_subscription(
             return row is not None
 
 
+def has_demo_subscription(
+    telegram_user_id: int,
+) -> bool:
+    """
+    Проверяет, получал ли пользователь демо-доступ ранее
+    (last_event_name='admin_manual_add' или period начинается с 'admin_').
+    """
+    sql = """
+    SELECT 1
+    FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND (last_event_name = 'admin_manual_add' OR period LIKE 'admin_%')
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            return row is not None
+
+
 def get_expired_active_subscriptions() -> List[Dict[str, Any]]:
     """
     Возвращает все подписки, которые ещё помечены active=TRUE,

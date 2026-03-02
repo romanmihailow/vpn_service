@@ -1227,6 +1227,38 @@ async def promo_open_callback(callback: CallbackQuery, state: FSMContext) -> Non
 
 @router.message(Command("demo"))
 async def cmd_demo(message: Message, state: FSMContext) -> None:
+    user = message.from_user
+    if user is None:
+        await message.answer("Не удалось определить пользователя.")
+        return
+
+    user_id = user.id
+
+    # Проверяем, есть ли активная подписка
+    active_sub = db.get_latest_subscription_for_telegram(telegram_user_id=user_id)
+    if active_sub:
+        expires_at = active_sub.get("expires_at")
+        if isinstance(expires_at, datetime):
+            expires_str = expires_at.strftime("%d.%m.%Y")
+        else:
+            expires_str = str(expires_at)
+        await message.answer(
+            f"У тебя уже есть активная подписка до <b>{expires_str}</b>.\n\n"
+            "Демо-доступ не требуется.",
+            disable_web_page_preview=True,
+        )
+        return
+
+    # Проверяем, получал ли пользователь демо ранее
+    had_demo = db.has_demo_subscription(telegram_user_id=user_id)
+    if had_demo:
+        await message.answer(
+            "Ты уже получал демо-доступ ранее.\n\n"
+            "Для продолжения использования VPN оформи подписку через /buy или /buy_crypto.",
+            disable_web_page_preview=True,
+        )
+        return
+
     await state.set_state(DemoRequest.waiting_for_message)
     await message.answer(
         "Ты можешь запросить тестовый демо-доступ к MaxNet VPN.\n\n"
