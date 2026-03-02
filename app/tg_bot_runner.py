@@ -693,6 +693,12 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
                 callback_data="ref:open_from_notify",
             ),
         ],
+        [
+            InlineKeyboardButton(
+                text="📱 Получить конфиг",
+                callback_data="config:resend",
+            ),
+        ],
     ]
 )
 
@@ -2552,6 +2558,71 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
         disable_web_page_preview=True,
     )
     await callback.answer("Ссылку можно переслать другу.")
+
+
+@router.callback_query(F.data == "config:resend")
+async def config_resend_callback(callback: CallbackQuery) -> None:
+    """
+    Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = user.id
+
+    sub = db.get_latest_subscription_for_telegram(telegram_user_id=telegram_user_id)
+    if not sub:
+        await callback.answer(
+            "У тебя нет активной подписки. Оформи подписку через /buy или /buy_crypto.",
+            show_alert=True,
+        )
+        return
+
+    vpn_ip = sub.get("vpn_ip")
+    private_key = sub.get("wg_private_key")
+
+    if not vpn_ip or not private_key:
+        log.warning(
+            "[ConfigResend] Missing vpn_ip or wg_private_key for tg_id=%s sub_id=%s",
+            telegram_user_id,
+            sub.get("id"),
+        )
+        await callback.answer(
+            "Не удалось получить данные конфига. Обратись в поддержку.",
+            show_alert=True,
+        )
+        return
+
+    config_text = wg.build_client_config(
+        client_private_key=private_key,
+        client_ip=vpn_ip,
+    )
+
+    try:
+        await send_vpn_config_to_user(
+            telegram_user_id=telegram_user_id,
+            config_text=config_text,
+            caption="Повторная отправка конфига MaxNet VPN.\n\nНиже — конфиг WireGuard и QR для подключения.",
+        )
+        log.info(
+            "[ConfigResend] Config resent to tg_id=%s sub_id=%s ip=%s",
+            telegram_user_id,
+            sub.get("id"),
+            vpn_ip,
+        )
+        await callback.answer("Конфиг отправлен!")
+    except Exception as e:
+        log.error(
+            "[ConfigResend] Failed to resend config to tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await callback.answer(
+            "Не удалось отправить конфиг. Попробуй позже или обратись в поддержку.",
+            show_alert=True,
+        )
 
 
 @router.message(Command("ref_info"))
