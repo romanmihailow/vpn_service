@@ -702,6 +702,36 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+# Клавиатура для /status (упрощённая)
+STATUS_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🔁 Продлить подписку",
+                callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎮 Продлить баллами",
+                callback_data="points:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🤝 Пригласить друга",
+                callback_data="ref:open_from_notify",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📱 Получить конфиг",
+                callback_data="config:resend",
+            ),
+        ],
+    ]
+)
+
 START_TEXT = (
     "MaxNet VPN | Быстрый VPN на WireGuard\n\n"
     "⚡ Подключение к серверам в Европе\n"
@@ -2286,7 +2316,7 @@ async def cmd_status(message: Message) -> None:
         text,
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
+        reply_markup=STATUS_KEYBOARD,
     )
 
 
