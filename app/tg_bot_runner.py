@@ -1725,18 +1725,44 @@ async def promo_admin_confirm_callback(callback: CallbackQuery, state: FSMContex
 
     await state.clear()
 
+    # Формируем информацию о сроке действия
+    valid_until_row = promo_rows[0].get("valid_until") if promo_rows else None
+    if valid_until_row:
+        valid_until_str = valid_until_row.strftime("%d.%m.%Y %H:%M")
+        valid_info = f"⏰ Применить до: <b>{valid_until_str}</b>"
+    else:
+        valid_info = "⏰ Срок применения: <b>без ограничения</b>"
+
+    # Информация о бонусе
+    bonus_info = f"🎁 Даёт: <b>+{extra_days} дней</b> к подписке"
+
+    # Комментарий
+    comment_info = ""
+    if comment and comment.strip() and comment.strip() != "-":
+        comment_info = f"\n📝 Комментарий: <i>{comment}</i>"
+
     if mode == "single":
         codes_preview = "\n".join(row.get("code") for row in promo_rows)
         text = (
             f"✅ Сгенерировано и сохранено в базе <b>{len(promo_rows)}</b> одноразовых промокодов.\n\n"
+            f"{bonus_info}\n"
+            f"{valid_info}"
+            f"{comment_info}\n\n"
             "Список кодов:\n"
             f"<code>{codes_preview}</code>"
         )
     else:
         code_preview = promo_rows[0].get("code")
+        max_uses_info = ""
+        if max_uses and max_uses > 0:
+            max_uses_info = f"\n🔢 Макс. использований: <b>{max_uses}</b>"
         text = (
-            "✅ Сгенерирован и сохранён в базе многоразовый промокод.\n"
+            "✅ Сгенерирован и сохранён в базе многоразовый промокод.\n\n"
             f"Код: <code>{code_preview}</code>\n\n"
+            f"{bonus_info}\n"
+            f"{valid_info}"
+            f"{max_uses_info}"
+            f"{comment_info}\n\n"
             "Промокод уже добавлен в таблицу <code>promo_codes</code> и готов к использованию."
         )
 
