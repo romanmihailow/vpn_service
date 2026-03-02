@@ -13,3 +13,5 @@ secrets/
 .dockerignore
 README cmd.md
 INSTRUCTIONS/
+MULTI_VPS_IMPLEMENTATION.md
+*.txt

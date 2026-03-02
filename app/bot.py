@@ -1,4 +1,5 @@
 import io
+import logging
 from typing import Optional
 from datetime import datetime
 
@@ -7,6 +8,8 @@ from aiogram.types import BufferedInputFile
 
 from .config import settings
 import qrcode
+
+log = logging.getLogger(__name__)
 
 
 
@@ -115,6 +118,7 @@ async def send_vpn_config_to_user(
             document=cfg_file,
             caption=caption,
         )
+        log.info("[SendConfig] Document sent to tg_id=%s", telegram_user_id)
 
         # 2. QR-код
         qr_bytes = generate_qr_image_bytes(config_text)
@@ -124,6 +128,7 @@ async def send_vpn_config_to_user(
             photo=qr_file,
             caption="Отсканируй этот QR в приложении WireGuard 👆",
         )
+        log.info("[SendConfig] QR photo sent to tg_id=%s", telegram_user_id)
 
         # 3. Инструкция
         await bot.send_message(
@@ -132,6 +137,15 @@ async def send_vpn_config_to_user(
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
+        log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
+
+    except Exception as e:
+        log.error(
+            "[SendConfig] Failed to send config to tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        raise
     finally:
         await bot.session.close()
 
