@@ -2306,9 +2306,7 @@ async def cmd_status(message: Message) -> None:
     text = (
         "🔐 Текущий статус VPN-подписки:\n\n"
         f"• VPN IP: <code>{vpn_ip}</code>\n"
-        f"• Действует до: <b>{expires_str}</b>\n\n"
-        "Если связь пропадёт после этой даты — просто продли подписку через Tribute "
-        "или оплати новый период по команде /buy."
+        f"• Действует до: <b>{expires_str}</b>"
     )
 
 
