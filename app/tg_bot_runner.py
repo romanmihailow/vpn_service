@@ -694,35 +694,36 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
-# Клавиатура для /status (упрощённая)
-STATUS_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="🔁 Продлить подписку",
-                callback_data="pay:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🎮 Продлить баллами",
-                callback_data="points:open",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="🤝 Пригласить друга",
-                callback_data="ref:open_from_notify",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="📱 Получить конфиг",
-                callback_data="config:resend",
-            ),
-        ],
-    ]
-)
+# Клавиатура для /status (упрощённая). user_id нужен для config:resend — берём подписку именно этого пользователя.
+def get_status_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔁 Продлить подписку",
+                    callback_data="pay:open",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎮 Продлить баллами",
+                    callback_data="points:open",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data="ref:open_from_notify",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📱 Получить конфиг",
+                    callback_data=f"config:resend:{user_id}",
+                ),
+            ],
+        ]
+    )
 
 START_TEXT = (
     "MaxNet VPN | Быстрый VPN на WireGuard\n\n"
@@ -2368,7 +2369,7 @@ async def cmd_status(message: Message) -> None:
         text,
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=STATUS_KEYBOARD,
+        reply_markup=get_status_keyboard(user_id),
     )
 
 
@@ -2642,17 +2643,26 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
     await callback.answer("Ссылку можно переслать другу.")
 
 
-@router.callback_query(F.data == "config:resend")
+@router.callback_query(F.data.startswith("config:resend:"))
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
     Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
+    user_id зашит в callback_data — гарантирует конфиг для того же пользователя, чей статус показан.
     """
-    user = callback.from_user
-    if user is None:
-        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+    try:
+        telegram_user_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
         return
 
-    telegram_user_id = user.id
+    if callback.from_user is None or callback.from_user.id != telegram_user_id:
+        await callback.answer("Эта кнопка только для владельца статуса.", show_alert=True)
+        return
 
     sub = db.get_latest_subscription_for_telegram(telegram_user_id=telegram_user_id)
     if not sub:
