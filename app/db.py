@@ -1131,6 +1131,7 @@ def get_latest_subscription_for_telegram(
     """
     Возвращает последнюю ДЕЙСТВУЮЩУЮ подписку для данного Telegram-пользователя.
     Учитываем и active = TRUE, и expires_at > NOW().
+    Сортировка по id DESC — берём самую новую по созданию (последнюю выданную).
     """
     sql = """
     SELECT *
@@ -1138,7 +1139,7 @@ def get_latest_subscription_for_telegram(
     WHERE telegram_user_id = %s
       AND active = TRUE
       AND expires_at > NOW()
-    ORDER BY expires_at DESC, id DESC
+    ORDER BY id DESC
     LIMIT 1;
     """
 

@@ -103,6 +103,16 @@ async def safe_send_message(
         return False
 
 
+def pluralize_points(n: int) -> str:
+    """Склонение слова 'балл' в зависимости от числа."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} балл"
+    elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} балла"
+    else:
+        return f"{n} баллов"
+
+
 def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
     """
     Деактивирует ВСЕ активные подписки пользователя и удаляет их peer'ы из WireGuard.
@@ -1193,9 +1203,9 @@ async def points_open_callback(callback: CallbackQuery) -> None:
 
     if balance < min_cost:
         await callback.message.answer(
-            f"💰 Твой баланс: <b>{balance} баллов</b>\n\n"
+            f"💰 Твой баланс: <b>{pluralize_points(balance)}</b>\n\n"
             f"❌ Недостаточно баллов для оплаты подписки.\n"
-            f"Минимальная стоимость: <b>{min_cost} баллов</b>.\n\n"
+            f"Минимальная стоимость: <b>{pluralize_points(min_cost)}</b>.\n\n"
             "Приглашай друзей по реферальной ссылке (/ref) и получай баллы за их оплаты!",
             disable_web_page_preview=True,
         )
@@ -1203,7 +1213,7 @@ async def points_open_callback(callback: CallbackQuery) -> None:
         return
 
     await callback.message.answer(
-        f"💰 Твой баланс: <b>{balance} баллов</b>\n\n"
+        f"💰 Твой баланс: <b>{pluralize_points(balance)}</b>\n\n"
         "Выбери тариф для оплаты баллами:",
         reply_markup=POINTS_TARIFF_KEYBOARD,
         disable_web_page_preview=True,
