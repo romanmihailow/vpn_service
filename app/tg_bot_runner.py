@@ -2647,10 +2647,15 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
     Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
-    sub_id зашит в callback_data — берём подписку по id, тот же конфиг что в статусе.
+    sub_id зашит в callback_data — берём подписку по id. Отправляем только в чат, где нажата кнопка.
     """
-    if callback.from_user is None:
+    if callback.from_user is None or callback.message is None or callback.message.chat is None:
         await callback.answer("Ошибка.", show_alert=True)
+        return
+
+    chat_id = callback.message.chat.id
+    if chat_id <= 0:
+        await callback.answer("Кнопка работает только в личном чате с ботом.", show_alert=True)
         return
 
     data = callback.data or ""
@@ -2672,9 +2677,19 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
         )
         return
 
-    telegram_user_id = sub.get("telegram_user_id")
-    if callback.from_user.id != telegram_user_id:
-        await callback.answer("Эта кнопка только для владельца статуса.", show_alert=True)
+    sub_owner_id = sub.get("telegram_user_id")
+    if sub_owner_id != chat_id:
+        log.warning(
+            "[ConfigResend] SECURITY: sub_id=%s owner=%s but button in chat_id=%s — rejected",
+            sub_id,
+            sub_owner_id,
+            chat_id,
+        )
+        await callback.answer("Эта кнопка из чужого статуса. Напиши /status в этом чате.", show_alert=True)
+        return
+
+    if callback.from_user.id != chat_id:
+        await callback.answer("Эта кнопка только для владельца чата.", show_alert=True)
         return
 
     if not sub.get("active") or not sub.get("expires_at"):
@@ -2692,18 +2707,17 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
 
     vpn_ip = sub.get("vpn_ip")
     private_key = sub.get("wg_private_key")
-    sub_id = sub.get("id")
     log.info(
-        "[ConfigResend] DEBUG chat_id=%s sub_id=%s vpn_ip=%r",
-        telegram_user_id,
+        "[ConfigResend] chat_id=%s sub_id=%s vpn_ip=%r (owner check passed)",
+        chat_id,
         sub_id,
         vpn_ip,
     )
 
     if not vpn_ip or not private_key:
         log.warning(
-            "[ConfigResend] Missing vpn_ip or wg_private_key for tg_id=%s sub_id=%s",
-            telegram_user_id,
+            "[ConfigResend] Missing vpn_ip or wg_private_key for chat_id=%s sub_id=%s",
+            chat_id,
             sub.get("id"),
         )
         await callback.answer(
@@ -2723,21 +2737,21 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
 
     try:
         await send_vpn_config_to_user(
-            telegram_user_id=telegram_user_id,
+            telegram_user_id=chat_id,
             config_text=config_text,
             caption="Повторная отправка конфига MaxNet VPN.\n\nНиже — конфиг WireGuard и QR для подключения.",
         )
         log.info(
-            "[ConfigResend] Config resent to tg_id=%s sub_id=%s ip=%s",
-            telegram_user_id,
-            sub.get("id"),
+            "[ConfigResend] Config sent to chat_id=%s sub_id=%s ip=%s",
+            chat_id,
+            sub_id,
             vpn_ip,
         )
         await callback.answer("Конфиг отправлен!")
     except Exception as e:
         log.error(
-            "[ConfigResend] Failed to resend config to tg_id=%s: %r",
-            telegram_user_id,
+            "[ConfigResend] Failed to resend config to chat_id=%s: %r",
+            chat_id,
             e,
         )
         await callback.answer(
