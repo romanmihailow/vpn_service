@@ -694,8 +694,8 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
-# Клавиатура для /status (упрощённая). user_id нужен для config:resend — берём подписку именно этого пользователя.
-def get_status_keyboard(user_id: int) -> InlineKeyboardMarkup:
+# Клавиатура для /status (упрощённая). sub_id в кнопке — гарантирует тот же конфиг, что в статусе.
+def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -719,7 +719,7 @@ def get_status_keyboard(user_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="📱 Получить конфиг",
-                    callback_data=f"config:resend:{user_id}",
+                    callback_data=f"config:resend:{sub_id}",
                 ),
             ],
         ]
@@ -2369,7 +2369,7 @@ async def cmd_status(message: Message) -> None:
         text,
         parse_mode="HTML",
         disable_web_page_preview=True,
-        reply_markup=get_status_keyboard(user_id),
+        reply_markup=get_status_keyboard(sub.get("id")),
     )
 
 
@@ -2647,25 +2647,45 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
     Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
-    Берём telegram_user_id из callback.message.chat.id — чат, где показан статус (в личке chat_id = user_id).
+    sub_id зашит в callback_data — берём подписку по id, тот же конфиг что в статусе.
     """
-    if callback.message is None or callback.message.chat is None:
-        await callback.answer("Ошибка: нет сообщения.", show_alert=True)
+    if callback.from_user is None:
+        await callback.answer("Ошибка.", show_alert=True)
         return
 
-    telegram_user_id = callback.message.chat.id
-    if telegram_user_id <= 0:
-        await callback.answer("Ошибка: некорректный чат.", show_alert=True)
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+    try:
+        sub_id = int(parts[2])
+    except ValueError:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
         return
 
-    if callback.from_user is None or callback.from_user.id != telegram_user_id:
+    sub = db.get_subscription_by_id(sub_id=sub_id)
+    if not sub:
+        await callback.answer(
+            "Подписка не найдена. Напиши /status заново.",
+            show_alert=True,
+        )
+        return
+
+    telegram_user_id = sub.get("telegram_user_id")
+    if callback.from_user.id != telegram_user_id:
         await callback.answer("Эта кнопка только для владельца статуса.", show_alert=True)
         return
 
-    sub = db.get_latest_subscription_for_telegram(telegram_user_id=telegram_user_id)
-    if not sub:
+    if not sub.get("active") or not sub.get("expires_at"):
         await callback.answer(
-            "У тебя нет активной подписки. Оформи подписку через /buy или /buy_crypto.",
+            "Подписка истекла. Оформи новую через /buy.",
+            show_alert=True,
+        )
+        return
+    if sub.get("expires_at") <= datetime.now(timezone.utc):
+        await callback.answer(
+            "Подписка истекла. Оформи новую через /buy.",
             show_alert=True,
         )
         return
