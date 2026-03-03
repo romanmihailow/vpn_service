@@ -2647,17 +2647,15 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
     Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
-    user_id зашит в callback_data — гарантирует конфиг для того же пользователя, чей статус показан.
+    Берём telegram_user_id из callback.message.chat.id — чат, где показан статус (в личке chat_id = user_id).
     """
-    data = callback.data or ""
-    parts = data.split(":")
-    if len(parts) != 3:
-        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+    if callback.message is None or callback.message.chat is None:
+        await callback.answer("Ошибка: нет сообщения.", show_alert=True)
         return
-    try:
-        telegram_user_id = int(parts[2])
-    except ValueError:
-        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+
+    telegram_user_id = callback.message.chat.id
+    if telegram_user_id <= 0:
+        await callback.answer("Ошибка: некорректный чат.", show_alert=True)
         return
 
     if callback.from_user is None or callback.from_user.id != telegram_user_id:
@@ -2674,6 +2672,13 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
 
     vpn_ip = sub.get("vpn_ip")
     private_key = sub.get("wg_private_key")
+    sub_id = sub.get("id")
+    log.info(
+        "[ConfigResend] DEBUG chat_id=%s sub_id=%s vpn_ip=%r",
+        telegram_user_id,
+        sub_id,
+        vpn_ip,
+    )
 
     if not vpn_ip or not private_key:
         log.warning(
@@ -2691,6 +2696,10 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
         client_private_key=private_key,
         client_ip=vpn_ip,
     )
+    for line in config_text.splitlines():
+        if "Address =" in line:
+            log.info("[ConfigResend] DEBUG config Address: %r", line.strip())
+            break
 
     try:
         await send_vpn_config_to_user(
