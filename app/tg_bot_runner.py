@@ -2413,6 +2413,8 @@ async def cmd_ref(message: Message) -> None:
 
     invited_by_levels = info.get("invited_by_levels") or {}
     paid_by_levels = info.get("paid_by_levels") or {}
+    paid_points_count = info.get("paid_points_count") or 0
+    paid_points_by_levels = info.get("paid_points_by_levels") or {}
 
     # Пытаемся получить username бота, чтобы собрать полноценную ссылку
     try:
@@ -2457,16 +2459,22 @@ async def cmd_ref(message: Message) -> None:
     lines.append("📊 <b>Сводка:</b>")
     lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
     lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
+    if paid_points_count:
+        lines.append(f"• 1-я линия — оплатили баллами: <b>{paid_points_count}</b>")
 
     # Пустая строка перед уровнями
     lines.append("")
 
-    # Блок уровней 2–5 в формате: «приглашено / оплатили»
+    # Блок уровней 2–5 в формате: «приглашено / оплатили» и отдельно оплатили баллами
     lines.append("Уровни 2–5 (приглашено / оплатили):")
     for level in range(2, 6):
         lvl_inv = invited_by_levels.get(level) or 0
         lvl_paid = paid_by_levels.get(level) or 0
-        lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
+        lvl_pts = paid_points_by_levels.get(level) or 0
+        if lvl_pts:
+            lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid} (баллами: {lvl_pts})")
+        else:
+            lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
 
     if is_admin(message):
         lines.append("")

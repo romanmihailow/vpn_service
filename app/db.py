@@ -2458,6 +2458,50 @@ def get_referral_upline_chain(
     return chain
 
 
+def _is_in_referral_downline(
+    referrer_id: int,
+    target_id: int,
+    conn,
+) -> bool:
+    """
+    Проверяет, находится ли target_id в даунлайне referrer_id
+    (referrer -> ... -> target в дереве «кто кого привёл»).
+    Если да — добавление (target, referrer) создало бы цикл.
+    """
+    if referrer_id == target_id:
+        return True
+    cur = conn.cursor()
+    try:
+        visited: set[int] = set()
+        current_level: List[int] = [referrer_id]
+        while current_level:
+            next_level: List[int] = []
+            for uid in current_level:
+                if uid in visited:
+                    continue
+                visited.add(uid)
+                cur.execute(
+                    """
+                    SELECT referred_telegram_user_id
+                    FROM referrals
+                    WHERE referrer_telegram_user_id = %s;
+                    """,
+                    (uid,),
+                )
+                for (referred,) in cur.fetchall():
+                    try:
+                        ref_int = int(referred)
+                    except (TypeError, ValueError):
+                        continue
+                    if ref_int == target_id:
+                        return True
+                    next_level.append(ref_int)
+            current_level = next_level
+        return False
+    finally:
+        cur.close()
+
+
 def create_referral_link(
     referred_telegram_user_id: int,
     referrer_telegram_user_id: int,
@@ -2466,8 +2510,10 @@ def create_referral_link(
     Создаёт запись в referrals (кто кого привёл).
 
     Ограничения:
+    - админ не может иметь реферера;
     - один referred_telegram_user_id может иметь только одного реферера;
     - нельзя указывать себя самого в качестве реферера;
+    - нельзя создавать цикл (referred не должен быть в даунлайне referrer);
     - если запись уже есть — возвращаем ошибку "already_has_referrer".
     """
     result: Dict[str, Any] = {
@@ -2475,6 +2521,12 @@ def create_referral_link(
         "error": None,
         "error_message": None,
     }
+
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0) or 0
+    if admin_id and referred_telegram_user_id == admin_id:
+        result["error"] = "admin_cannot_have_referrer"
+        result["error_message"] = "Админ не может иметь реферера."
+        return result
 
     if referred_telegram_user_id == referrer_telegram_user_id:
         result["error"] = "self_ref"
@@ -2496,6 +2548,16 @@ def create_referral_link(
                 if row is not None:
                     result["error"] = "already_has_referrer"
                     result["error_message"] = "Реферер для этого пользователя уже задан."
+                    return result
+
+                # Проверяем, не создаст ли связь цикл: referred не должен быть в даунлайне referrer
+                if _is_in_referral_downline(
+                    referrer_id=referrer_telegram_user_id,
+                    target_id=referred_telegram_user_id,
+                    conn=conn,
+                ):
+                    result["error"] = "would_create_cycle"
+                    result["error_message"] = "Такая связь создала бы цикл в реферальном дереве."
                     return result
 
                 # Вставляем запись
@@ -2521,6 +2583,24 @@ def create_referral_link(
             result["error"] = "db_error"
             result["error_message"] = f"Ошибка при работе с базой данных: {e!r}"
             return result
+
+
+def delete_referrer_for_user(telegram_user_id: int) -> bool:
+    """
+    Удаляет запись о реферере для пользователя (referred_telegram_user_id).
+    Возвращает True, если запись была удалена, False если её не было.
+    """
+    sql = """
+    DELETE FROM referrals
+    WHERE referred_telegram_user_id = %s
+    RETURNING referred_telegram_user_id;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+        conn.commit()
+    return row is not None
 
 
 def get_referral_code_by_code(code: str) -> Optional[Dict[str, Any]]:
@@ -2958,6 +3038,7 @@ def get_or_create_referral_info(
     max_levels = 5
     invited_by_levels: Dict[int, int] = {}
     paid_by_levels: Dict[int, int] = {}
+    paid_points_by_levels: Dict[int, int] = {}
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -2975,7 +3056,7 @@ def get_or_create_referral_info(
                 except (TypeError, ValueError):
                     invited_count = 0
 
-            # --------- 2. Сколько из приглашённых оплатили (1-я линия) ---------
+            # --------- 2. Сколько из приглашённых оплатили (1-я линия) — ЮKassa/Heleket ---------
             sql_paid = """
             SELECT COUNT(DISTINCT r.referred_telegram_user_id) AS cnt
             FROM referrals r
@@ -2994,6 +3075,27 @@ def get_or_create_referral_info(
                     paid_referrals_count = int(row2[0])
                 except (TypeError, ValueError):
                     paid_referrals_count = 0
+
+            # --------- 2b. Сколько оплатили баллами (1-я линия) — отдельный пункт ---------
+            sql_paid_points = """
+            SELECT COUNT(DISTINCT r.referred_telegram_user_id) AS cnt
+            FROM referrals r
+            JOIN vpn_subscriptions s
+              ON s.telegram_user_id = r.referred_telegram_user_id
+            WHERE r.referrer_telegram_user_id = %s
+              AND (
+                    s.last_event_name LIKE 'points_payment_%%'
+                 OR s.last_event_name LIKE 'points_extend_%%'
+              );
+            """
+            cur.execute(sql_paid_points, (telegram_user_id,))
+            row2b = cur.fetchone()
+            paid_points_count = 0
+            if row2b is not None and row2b[0] is not None:
+                try:
+                    paid_points_count = int(row2b[0])
+                except (TypeError, ValueError):
+                    paid_points_count = 0
 
         # --------- 3. Строим дерево рефералов до 5-го уровня ---------
         # Загрузим все связи в память: referrer -> [referred...]
@@ -3053,14 +3155,14 @@ def get_or_create_referral_info(
             current_level_users = next_level_users
             level += 1
 
-        # --------- 4. Считаем, сколько оплатили на каждом уровне ---------
+        # --------- 4. Считаем, сколько оплатили на каждом уровне (ЮKassa/Heleket) ---------
         with conn.cursor() as cur3:
             for lvl, uids in users_by_level.items():
                 if not uids:
                     paid_by_levels[lvl] = 0
+                    paid_points_by_levels[lvl] = 0
                     continue
 
-                # используем ANY(%s) для списка
                 sql_paid_lvl = """
                 SELECT COUNT(DISTINCT s.telegram_user_id) AS cnt
                 FROM vpn_subscriptions s
@@ -3080,11 +3182,33 @@ def get_or_create_referral_info(
                         lvl_cnt = 0
                 paid_by_levels[lvl] = lvl_cnt
 
+                # Оплата баллами — отдельно
+                sql_paid_points_lvl = """
+                SELECT COUNT(DISTINCT s.telegram_user_id) AS cnt
+                FROM vpn_subscriptions s
+                WHERE s.telegram_user_id = ANY(%s)
+                  AND (
+                        s.last_event_name LIKE 'points_payment_%%'
+                     OR s.last_event_name LIKE 'points_extend_%%'
+                  );
+                """
+                cur3.execute(sql_paid_points_lvl, (uids,))
+                row_pts = cur3.fetchone()
+                lvl_pts = 0
+                if row_pts is not None and row_pts[0] is not None:
+                    try:
+                        lvl_pts = int(row_pts[0])
+                    except (TypeError, ValueError):
+                        lvl_pts = 0
+                paid_points_by_levels[lvl] = lvl_pts
+
     return {
         "ok": True,
         "ref_code": ref_code,
         "invited_count": invited_count,
         "paid_referrals_count": paid_referrals_count,
+        "paid_points_count": paid_points_count,
         "invited_by_levels": invited_by_levels,
         "paid_by_levels": paid_by_levels,
+        "paid_points_by_levels": paid_points_by_levels,
     }
