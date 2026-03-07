@@ -541,7 +541,7 @@ def deactivate_subscription_by_id(
 ) -> Optional[Dict[str, Any]]:
     """
     Деактивирует одну подписку по id (если она ещё активна) и возвращает её данные.
-    Нужно, чтобы из админки отключать конкретный ключ.
+    Возвращает IP в пул для переиспользования.
     """
     select_sql = """
     SELECT *
@@ -568,6 +568,13 @@ def deactivate_subscription_by_id(
 
             cur.execute(update_sql, (event_name, sub_id))
         conn.commit()
+
+    vpn_ip = sub.get("vpn_ip")
+    if vpn_ip:
+        try:
+            release_ip_in_pool(str(vpn_ip))
+        except Exception:
+            pass
 
     return sub
 

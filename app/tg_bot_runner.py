@@ -4317,7 +4317,6 @@ async def cmd_admin_deactivate(message: Message) -> None:
 
     telegram_user_id = sub.get("telegram_user_id")
     telegram_user_name = sub.get("telegram_user_name")
-    vpn_ip = sub.get("vpn_ip")
 
     if telegram_user_name:
         tg_display = f"{telegram_user_id} ({telegram_user_name})"
@@ -5128,7 +5127,6 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
 
         telegram_user_id = sub.get("telegram_user_id")
         telegram_user_name = sub.get("telegram_user_name")
-        vpn_ip = sub.get("vpn_ip")
 
         if telegram_user_name:
             tg_display = f"{telegram_user_id} ({telegram_user_name})"
@@ -5503,7 +5501,6 @@ async def auto_deactivate_expired_subscriptions() -> None:
                 for sub in expired_subs:
                     sub_id = sub.get("id")
                     pub_key = sub.get("wg_public_key")
-                    vpn_ip = sub.get("vpn_ip")
 
                     if not sub_id:
                         continue
@@ -5532,17 +5529,7 @@ async def auto_deactivate_expired_subscriptions() -> None:
                                 repr(e),
                             )
 
-                    # Возвращаем IP в пул, чтобы его мог получить новый пользователь
-                    if vpn_ip:
-                        try:
-                            db.release_ip_in_pool(vpn_ip)
-                        except Exception as e:
-                            log.error(
-                                "[AutoExpire] Failed to release IP %s for sub_id=%s: %s",
-                                vpn_ip,
-                                sub_id,
-                                repr(e),
-                            )
+                    # IP возвращается в пул внутри deactivate_subscription_by_id
 
             except Exception as e:
                 log.error(
