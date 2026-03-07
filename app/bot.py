@@ -17,17 +17,12 @@ INSTRUCTION_TEXT = """
 📱 Инструкция: подключение телефона к VPN (WireGuard)
 
 Шаг 1. Установить приложение WireGuard
-Выберите вашу платформу:
 
 <b>Android</b>:
-1. Открыть Google Play
-2. Ввести: <code>WireGuard</code>
-3. Установить приложение (разработчик: WireGuard Development Team)
+Нажми: <a href="https://play.google.com/store/apps/details?id=com.wireguard.android">Перейти в Play Маркет</a>
 
 <b>iPhone (iOS)</b>:
-1. Открыть App Store
-2. Ввести: <code>WireGuard</code>
-3. Установить приложение (разработчик: WireGuard Development Team)
+Нажми: <a href="https://apps.apple.com/app/wireguard/id1441195209">Перейти в App Store</a>
 
 Шаг 2. Получить конфигурацию VPN
 Тебе пришли QR-код и файл <code>.conf</code> от бота.
@@ -71,7 +66,7 @@ INSTRUCTION_TEXT = """
 • <b>Не сканируется QR</b> — увеличь яркость экрана, почисти экран, приблизь/отдали камеру.  
 • <b>Подключение не включается</b> — проверь интернет на телефоне (Wi-Fi / 4G).  
 • <b>Нет интернета после включения</b> — перезапусти телефон или отключи/включи VPN, переключи Wi-Fi/4G.  
-• <b>Пишет “Handshake timeout”</b> — сервер недоступен или неверные ключи (напиши админу).
+• <b>Не подключается / ошибка соединения</b> — проверь интернет, перезапусти приложение. Если не помогло — напиши в поддержку @MaxNet_VPN.
 """.strip()
 
 
