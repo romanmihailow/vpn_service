@@ -7,6 +7,9 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 import json
 from .config import settings
+from .logger import get_logger
+
+log = get_logger()
 
 
 _ip_lock_ctx: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
@@ -573,8 +576,13 @@ def deactivate_subscription_by_id(
     if vpn_ip:
         try:
             release_ip_in_pool(str(vpn_ip))
-        except Exception:
-            pass
+        except Exception as e:
+            log.error(
+                "[Deactivate] Failed to release IP %s for sub_id=%s: %r",
+                vpn_ip,
+                sub_id,
+                e,
+            )
 
     return sub
 
