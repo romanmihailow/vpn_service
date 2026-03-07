@@ -1410,6 +1410,20 @@ def get_active_subscriptions_for_telegram(
             return [dict(r) for r in rows]
 
 
+def user_can_claim_referral_trial(telegram_user_id: int) -> bool:
+    """
+    Может ли пользователь получить реферальный триал по кнопке.
+    True если: есть реферер, триал ещё не получал, нет активной подписки.
+    """
+    if get_referrer_telegram_id(telegram_user_id) is None:
+        return False
+    if has_referral_trial_subscription(telegram_user_id):
+        return False
+    if get_latest_subscription_for_telegram(telegram_user_id) is not None:
+        return False
+    return True
+
+
 def has_referral_trial_subscription(
     telegram_user_id: int,
 ) -> bool:

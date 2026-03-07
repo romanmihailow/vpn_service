@@ -672,6 +672,33 @@ REF_SHARE_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+REF_TRIAL_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="Получить тестовый доступ",
+                callback_data="ref_trial:claim",
+            ),
+        ],
+    ]
+)
+
+
+def get_start_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для /start. Добавляет кнопку триала, если пользователь может его получить."""
+    if not db.user_can_claim_referral_trial(telegram_user_id):
+        return SUBSCRIBE_KEYBOARD
+    # Добавляем кнопку триала в начало
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Получить тестовый доступ",
+                callback_data="ref_trial:claim",
+            ),
+        ],
+    ] + [r for r in SUBSCRIBE_KEYBOARD.inline_keyboard]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 # Клавиатура для напоминаний / окончания подписки
 SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
@@ -727,6 +754,13 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+REF_LINK_WELCOME_TEXT = (
+    "Ты перешёл по реферальной ссылке.\n\n"
+    "Нажми кнопку, чтобы получить 7 дней пробного доступа бесплатно."
+)
+
+REF_TRIAL_BUTTON_CALLBACK = "ref_trial:claim"
 
 START_TEXT = (
     "MaxNet VPN | Быстрый VPN на WireGuard\n\n"
@@ -789,26 +823,20 @@ async def cmd_start(message: Message) -> None:
                     start_param,
                 )
             else:
-                # 3. Регистрируем факт старта по реферальному коду
+                # 3. Регистрируем факт старта по реферальному коду (реферер определяется сразу)
                 reg_res = db.register_referral_start(
                     invited_telegram_user_id=user.id,
                     referral_code=start_param,
                     raw_start_param=text,
                 )
 
-                # 4. Если регистрация прошла успешно — пытаемся выдать триал на 7 дней
+                # 4. Если регистрация успешна — показываем экран «получить триал по кнопке» (без авто-выдачи)
                 if reg_res and reg_res.get("ok"):
-                    try:
-                        await try_give_referral_trial_7d(
-                            telegram_user_id=user.id,
-                            telegram_username=user.username,
-                        )
-                    except Exception as e2:
-                        log.error(
-                            "[ReferralTrial] Error while giving trial for tg_id=%s: %r",
-                            user.id,
-                            e2,
-                        )
+                    await message.answer(
+                        REF_LINK_WELCOME_TEXT,
+                        reply_markup=REF_TRIAL_KEYBOARD,
+                    )
+                    return
                 else:
                     log.info(
                         "[Referral] register_referral_start returned not ok for tg_id=%s param=%r res=%r",
@@ -827,7 +855,7 @@ async def cmd_start(message: Message) -> None:
 
     await message.answer(
         START_TEXT,
-        reply_markup=SUBSCRIBE_KEYBOARD,
+        reply_markup=get_start_keyboard(user.id if user else 0),
     )
 
 
@@ -869,13 +897,13 @@ REF_INFO_TEXT = (
     "<b>Как это работает</b>\n"
     "1. В команде /ref ты получаешь личную реферальную ссылку.\n"
     "2. Друг переходит по ссылке и нажимает <b>Start</b> в боте.\n"
-    "3. Если у друга ещё нет активной подписки и ему ранее не выдавался реферальный триал, "
-    "бот автоматически выдаёт пробный доступ к MaxNet VPN на 7 дней.\n"
+    "3. Друг нажимает кнопку «Получить тестовый доступ» — получает 7 дней пробного периода "
+    "(если у него ещё нет активной подписки и он ранее не получал реферальный триал).\n"
     "4. Когда приглашённый пользователь оплачивает подписку, ты и вышестоящие партнёры "
     "получаете баллы.\n\n"
     "<b>Бонус для приглашённого</b>\n"
-    "• 7 дней пробного доступа по реферальной ссылке при соблюдении условий.\n"
-    "• Пробный период по реферальной ссылке выдаётся только один раз и не выдаётся, "
+    "• 7 дней пробного доступа по реферальной ссылке (по нажатию кнопки).\n"
+    "• Пробный период выдаётся только один раз и не выдаётся, "
     "если уже есть активная подписка.\n\n"
     "<b>Баллы и уровни</b>\n"
     "Баллы начисляются за оплаты приглашённых пользователей по партнёрским уровням "
@@ -2514,6 +2542,42 @@ async def cmd_ref(message: Message) -> None:
         text,
         disable_web_page_preview=True,
     )
+
+
+@router.callback_query(F.data == "ref_trial:claim")
+async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
+    """
+    Кнопка «Получить тестовый доступ» — выдаём реферальный триал по запросу.
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = user.id
+    if not db.user_can_claim_referral_trial(telegram_user_id):
+        await callback.answer(
+            "Ты уже получал реферальный триал или у тебя есть активная подписка.",
+            show_alert=True,
+        )
+        return
+
+    try:
+        await try_give_referral_trial_7d(
+            telegram_user_id=telegram_user_id,
+            telegram_username=user.username,
+        )
+        await callback.answer("Доступ выдан! Проверь сообщения выше.")
+    except Exception as e:
+        log.error(
+            "[ReferralTrial] Error on claim button for tg_id=%s: %r",
+            telegram_user_id,
+            e,
+        )
+        await callback.answer(
+            "Не удалось выдать доступ. Попробуй позже или напиши в поддержку.",
+            show_alert=True,
+        )
 
 
 @router.callback_query(F.data == "ref:open_from_ref")
