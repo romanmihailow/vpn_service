@@ -1573,6 +1573,47 @@ def get_subscriptions_expiring_in_window(
             return [dict(r) for r in rows]
 
 
+def get_subscriptions_for_no_handshake_reminder(
+    reminder_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Возвращает активные подписки для напоминания «ты ещё не подключался».
+    Только триал и промо (referral_free_trial_7d, promo*), платным не шлём.
+    reminder_type: 'no_handshake_24h' (созданы >= 24h) или 'no_handshake_5d' (>= 5 дней).
+    """
+    if reminder_type == "no_handshake_24h":
+        hours = 24
+    elif reminder_type == "no_handshake_5d":
+        hours = 5 * 24
+    else:
+        return []
+
+    sql = """
+    SELECT s.*
+    FROM vpn_subscriptions s
+    WHERE s.active = TRUE
+      AND s.expires_at > NOW()
+      AND s.telegram_user_id IS NOT NULL
+      AND s.wg_public_key IS NOT NULL
+      AND s.created_at <= NOW() - (%s || ' hours')::interval
+      AND (
+        s.last_event_name = 'referral_free_trial_7d'
+        OR s.last_event_name LIKE 'promo%%'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n
+        WHERE n.subscription_id = s.id
+          AND n.notification_type = %s
+      )
+    ORDER BY s.created_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (hours, reminder_type))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 def subscription_exists_by_event(event_name: str) -> bool:
     """
     Проверяет, есть ли в базе хотя бы одна запись с таким last_event_name.

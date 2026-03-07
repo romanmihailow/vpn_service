@@ -42,6 +42,9 @@ BROADCAST_BATCH_SLEEP = 1.0
 MAX_BROADCAST_USERS = 5000
 NOTIFY_BATCH_SIZE = 25
 NOTIFY_BATCH_SLEEP = 1.0
+NO_HANDSHAKE_REMINDER_SLEEP = 5.0  # секунд между отправками (защита от бана Telegram)
+NO_HANDSHAKE_REFRESH_EVERY_N = 20  # обновлять handshakes каждые N подписок
+NO_HANDSHAKE_PAUSE_BETWEEN_TYPES = 5.0  # пауза между батчами 24h и 5d (сек)
 TELEGRAM_GLOBAL_SEMAPHORE = asyncio.Semaphore(20)
 
 
@@ -5630,6 +5633,181 @@ async def auto_revoke_unused_promo_points() -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
 
 
+async def auto_no_handshake_reminder(bot: Bot) -> None:
+    """
+    Раз в час проверяет подписки, по которым пользователь ещё не подключался (нет handshake),
+    и отправляет напоминание: через 24h и через 5 дней.
+    Пауза 5 сек между отправками, обработка блокировки/удаления бота.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER):
+        log.info("[NoHandshakeRemind] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                handshakes = {}
+                try:
+                    if hasattr(asyncio, "to_thread"):
+                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                    else:
+                        loop = asyncio.get_running_loop()
+                        handshakes = await loop.run_in_executor(
+                            None, wg.get_handshake_timestamps
+                        )
+                except Exception as e:
+                    log.error(
+                        "[NoHandshakeRemind] Failed to get wg handshakes: %r, skip run",
+                        e,
+                    )
+                    await asyncio.sleep(3600)
+                    continue
+
+                def _format_expires(exp) -> str:
+                    if exp is None:
+                        return "?"
+                    if hasattr(exp, "strftime"):
+                        return exp.strftime("%d.%m.%Y")
+                    return str(exp)[:10]
+
+                def _days_until_expiry(exp) -> int:
+                    """Оставшиеся полные дни до expires_at. 0 если уже истекло."""
+                    if exp is None:
+                        return 0
+                    try:
+                        from datetime import date
+                        now_d = datetime.now(timezone.utc).date()
+                        exp_d = exp.date() if hasattr(exp, "date") else date.fromisoformat(str(exp)[:10])
+                        return max(0, (exp_d - now_d).days)
+                    except (AttributeError, TypeError, ValueError):
+                        return 0
+
+                def _days_text(days: int) -> str:
+                    if days <= 0:
+                        return "скоро"
+                    if days == 1:
+                        return "1 день"
+                    if 2 <= days <= 4:
+                        return f"{days} дня"
+                    return f"{days} дней"
+
+                def _not_connected(pubkey: str) -> bool:
+                    return handshakes.get(pubkey, 0) == 0
+
+                def _make_24h_text(sub: dict) -> str:
+                    exp = sub.get("expires_at")
+                    return (
+                        f"Ты получил доступ к MaxNet VPN, но пока не подключался.\n\n"
+                        f"Подписка действует до {_format_expires(exp)}. "
+                        f"Конфиг — /status → кнопка «Получить конфиг».\n\n"
+                        f"Нужна помощь — @MaxNet_VPN"
+                    )
+
+                def _make_5d_text(sub: dict) -> str:
+                    days = _days_until_expiry(sub.get("expires_at"))
+                    return (
+                        f"Подписка MaxNet VPN истекает через {_days_text(days)}.\n\n"
+                        f"Ты ещё не подключался. Конфиг — /status → кнопка «Получить конфиг».\n\n"
+                        f"Помощь: @MaxNet_VPN"
+                    )
+
+                async def _fetch_handshakes():
+                    if hasattr(asyncio, "to_thread"):
+                        return await asyncio.to_thread(wg.get_handshake_timestamps)
+                    loop = asyncio.get_running_loop()
+                    return await loop.run_in_executor(None, wg.get_handshake_timestamps)
+
+                BATCHES = [
+                    ("no_handshake_24h", _make_24h_text),
+                    ("no_handshake_5d", _make_5d_text),
+                ]
+
+                for batch_idx, (reminder_type, make_text) in enumerate(BATCHES):
+                    if batch_idx > 0:
+                        await asyncio.sleep(NO_HANDSHAKE_PAUSE_BETWEEN_TYPES)
+                    handshakes = await _fetch_handshakes()
+                    subs = db.get_subscriptions_for_no_handshake_reminder(reminder_type)
+                    stats_sent = 0
+                    stats_send_failed = 0
+                    stats_db_error = 0
+                    stats_skipped_handshake = 0
+                    for idx, sub in enumerate(subs):
+                        if idx > 0 and idx % NO_HANDSHAKE_REFRESH_EVERY_N == 0:
+                            try:
+                                handshakes = await _fetch_handshakes()
+                            except Exception as e:
+                                log.warning(
+                                    "[NoHandshakeRemind] Mid-batch handshake refresh failed: %r",
+                                    e,
+                                )
+                        pubkey = (sub.get("wg_public_key") or "").strip()
+                        if not pubkey or not _not_connected(pubkey):
+                            stats_skipped_handshake += 1
+                            continue
+
+                        sub_id = sub.get("id")
+                        telegram_user_id = sub.get("telegram_user_id")
+                        if not sub_id or not telegram_user_id:
+                            continue
+
+                        # Сначала записываем — идемпотентность: при сбое отправки не будет дубля
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type=reminder_type,
+                                telegram_user_id=telegram_user_id,
+                                expires_at=sub.get("expires_at"),
+                            )
+                        except Exception as db_err:
+                            log.error(
+                                "[NoHandshakeRemind] Failed to save notification sub_id=%s: %r",
+                                sub_id,
+                                db_err,
+                            )
+                            stats_db_error += 1
+                            continue
+
+                        text = make_text(sub)
+                        ok = await safe_send_message(
+                            bot=bot,
+                            chat_id=telegram_user_id,
+                            text=text,
+                            disable_web_page_preview=True,
+                        )
+                        if ok:
+                            stats_sent += 1
+                            log.info(
+                                "[NoHandshakeRemind] Sent %s sub_id=%s tg_id=%s",
+                                reminder_type,
+                                sub_id,
+                                telegram_user_id,
+                            )
+                        else:
+                            stats_send_failed += 1
+
+                        await asyncio.sleep(NO_HANDSHAKE_REMINDER_SLEEP)
+
+                    log.info(
+                        "[NoHandshakeRemind] batch=%s sent=%s send_failed=%s db_error=%s skipped_handshake=%s",
+                        reminder_type,
+                        stats_sent,
+                        stats_send_failed,
+                        stats_db_error,
+                        stats_skipped_handshake,
+                    )
+
+            except Exception as e:
+                log.error(
+                    "[NoHandshakeRemind] Unexpected error: %r",
+                    e,
+                )
+
+            await asyncio.sleep(3600)
+
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER)
+
+
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
@@ -5655,6 +5833,7 @@ async def main() -> None:
     asyncio.create_task(auto_deactivate_expired_subscriptions())
     asyncio.create_task(auto_notify_expiring_subscriptions(bot))
     asyncio.create_task(auto_revoke_unused_promo_points())
+    asyncio.create_task(auto_no_handshake_reminder(bot))
 
     app = create_app()
     runner = web.AppRunner(app)

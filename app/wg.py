@@ -67,6 +67,25 @@ def run_cmd(cmd: list) -> str:
     )
     return result.stdout.strip()
 
+
+def get_handshake_timestamps() -> dict[str, int]:
+    """
+    Возвращает dict: public_key -> unix timestamp последнего handshake.
+    timestamp=0 значит peer никогда не подключался.
+    При ошибке (нет доступа к wg и т.п.) выбрасывает исключение.
+    """
+    out = run_cmd(["wg", "show", settings.WG_INTERFACE_NAME, "latest-handshakes"])
+    result: dict[str, int] = {}
+    for line in out.strip().split("\n"):
+        if "\t" in line:
+            pk, ts_str = line.split("\t", 1)
+            try:
+                result[pk.strip()] = int(ts_str.strip())
+            except ValueError:
+                continue
+    return result
+
+
 def ensure_wg_up() -> None:
     """
     Проверяем, что WireGuard-интерфейс поднят.
