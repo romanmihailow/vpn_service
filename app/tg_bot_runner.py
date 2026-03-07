@@ -748,7 +748,7 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="📱 Получить конфиг",
+                    text="📱 Получить настройки",
                     callback_data=f"config:resend:{sub_id}",
                 ),
             ],
@@ -2721,7 +2721,7 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("config:resend:"))
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
-    Повторная отправка VPN-конфига по кнопке «📱 Получить конфиг».
+    Повторная отправка VPN-настроек по кнопке «📱 Получить настройки».
     sub_id зашит в callback_data — берём подписку по id. Отправляем только в чат, где нажата кнопка.
     """
     if callback.from_user is None or callback.message is None or callback.message.chat is None:
@@ -2796,7 +2796,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
             sub.get("id"),
         )
         await callback.answer(
-            "Не удалось получить данные конфига. Обратись в поддержку.",
+            "Не удалось получить настройки. Обратись в поддержку.",
             show_alert=True,
         )
         return
@@ -2822,7 +2822,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
             sub_id,
             vpn_ip,
         )
-        await callback.answer("Конфиг отправлен!")
+        await callback.answer("Настройки отправлены!")
     except Exception as e:
         log.error(
             "[ConfigResend] Failed to resend config to chat_id=%s: %r",
@@ -2830,7 +2830,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
             e,
         )
         await callback.answer(
-            "Не удалось отправить конфиг. Попробуй позже или обратись в поддержку.",
+            "Не удалось отправить настройки. Попробуй позже или обратись в поддержку.",
             show_alert=True,
         )
 
@@ -5762,8 +5762,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     exp = sub.get("expires_at")
                     return (
                         f"Ты получил доступ к MaxNet VPN, но пока не подключался.\n\n"
-                        f"Подписка действует до {_format_expires(exp)}. "
-                        f"Конфиг — /status → кнопка «Получить конфиг».\n\n"
+                        f"Подписка действует до {_format_expires(exp)}.\n\n"
+                        f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
                         f"Нужна помощь — @MaxNet_VPN"
                     )
 
@@ -5771,7 +5771,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     days = _days_until_expiry(sub.get("expires_at"))
                     return (
                         f"Подписка MaxNet VPN истекает через {_days_text(days)}.\n\n"
-                        f"Ты ещё не подключался. Конфиг — /status → кнопка «Получить конфиг».\n\n"
+                        f"Ты ещё не подключался.\n\n"
+                        f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
                         f"Помощь: @MaxNet_VPN"
                     )
 
