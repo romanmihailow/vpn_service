@@ -4382,11 +4382,19 @@ async def cmd_admin_activate(message: Message) -> None:
             reason="auto_replace_admin_activate",
         )
 
-    # теперь активируем нужную подписку
-    sub = db.activate_subscription_by_id(
-        sub_id=sub_id,
-        event_name="admin_activate",
-    )
+    # теперь активируем нужную подписку (при реактивации выделяется новый IP)
+    try:
+        sub = db.activate_subscription_by_id(
+            sub_id=sub_id,
+            event_name="admin_activate",
+        )
+    except RuntimeError as e:
+        if "No free VPN IPs" in str(e):
+            await message.answer("Нет свободных IP в пуле. Активация невозможна.")
+        else:
+            raise
+        return
+
     if not sub:
         await message.answer("Подписка не найдена или уже активна.")
         return
@@ -4436,7 +4444,8 @@ async def cmd_admin_activate(message: Message) -> None:
         f"Подписка с ID {sub_id} активирована.\n"
         f"Пользователь TG: {tg_display}\n"
         f"VPN IP: {vpn_ip}\n"
-        f"Peer в WireGuard добавлен.",
+        f"Peer в WireGuard добавлен.\n"
+        f"⚠️ Клиент должен заново скачать конфиг (IP изменился).",
         disable_web_page_preview=True,
     )
 
@@ -5127,6 +5136,7 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
 
         telegram_user_id = sub.get("telegram_user_id")
         telegram_user_name = sub.get("telegram_user_name")
+        vpn_ip = sub.get("vpn_ip", "")
 
         if telegram_user_name:
             tg_display = f"{telegram_user_id} ({telegram_user_name})"
@@ -5160,11 +5170,19 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
                 reason="auto_replace_inline_activate",
             )
 
-        # Теперь активируем нужную подписку
-        sub = db.activate_subscription_by_id(
-            sub_id=sub_id,
-            event_name="admin_activate",
-        )
+        # Теперь активируем нужную подписку (при реактивации выделяется новый IP)
+        try:
+            sub = db.activate_subscription_by_id(
+                sub_id=sub_id,
+                event_name="admin_activate",
+            )
+        except RuntimeError as e:
+            if "No free VPN IPs" in str(e):
+                await callback.answer("Нет свободных IP в пуле. Активация невозможна.", show_alert=True)
+            else:
+                raise
+            return
+
         if not sub:
             await callback.answer("Подписка не найдена или уже активна.", show_alert=True)
             return
@@ -5213,7 +5231,8 @@ async def admin_inline_callback(callback: CallbackQuery) -> None:
             f"Подписка с ID {sub_id} активирована.\n"
             f"Пользователь TG: {tg_display}\n"
             f"VPN IP: {vpn_ip}\n"
-            f"Peer в WireGuard добавлен."
+            f"Peer в WireGuard добавлен.\n"
+            f"⚠️ Клиент должен заново скачать конфиг (IP изменился)."
         )
         await callback.message.answer(text)
         await callback.answer("Подписка активирована.")

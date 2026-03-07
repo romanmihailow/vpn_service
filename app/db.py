@@ -585,18 +585,12 @@ def activate_subscription_by_id(
     """
     Активирует одну подписку по id (если она сейчас неактивна) и возвращает её данные.
     Нужно, чтобы из админки включать ключ обратно.
+    При реактивации выделяет новый IP (старый был возвращён в пул при деактивации).
+    Клиент должен заново скачать конфиг.
     """
     select_sql = """
     SELECT *
     FROM vpn_subscriptions
-    WHERE id = %s
-      AND active = FALSE;
-    """
-
-    update_sql = """
-    UPDATE vpn_subscriptions
-    SET active = TRUE,
-        last_event_name = %s
     WHERE id = %s
       AND active = FALSE;
     """
@@ -609,9 +603,22 @@ def activate_subscription_by_id(
                 return None
             sub = dict(row)
 
-            cur.execute(update_sql, (event_name, sub_id))
+    new_ip = allocate_free_ip_from_pool()
+
+    update_sql = """
+    UPDATE vpn_subscriptions
+    SET active = TRUE,
+        vpn_ip = %s,
+        last_event_name = %s
+    WHERE id = %s
+      AND active = FALSE;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(update_sql, (new_ip, event_name, sub_id))
         conn.commit()
 
+    sub["vpn_ip"] = new_ip
     return sub
 
 
