@@ -2529,9 +2529,35 @@ async def cmd_ref(message: Message) -> None:
             lines.append(
                 f"• Всего когда-либо: <b>{stats.get('total_unique_ever', 0)}</b>"
             )
-            lines.append(
-                f"• Новых за сегодня: <b>{stats.get('new_active_today', 0)}</b>"
-            )
+            new_today = stats.get("new_active_today", 0)
+            connected_today = None
+            if new_today > 0:
+                try:
+                    pubkeys = db.get_new_active_today_public_keys()
+                    if pubkeys:
+                        if hasattr(asyncio, "to_thread"):
+                            handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                        else:
+                            loop = asyncio.get_running_loop()
+                            handshakes = await loop.run_in_executor(
+                                None, wg.get_handshake_timestamps
+                            )
+                        connected_today = sum(
+                            1 for pk in pubkeys if handshakes.get(pk, 0) > 0
+                        )
+                except Exception as e:
+                    log.warning(
+                        "[Referral] Failed to get handshakes for new_today: %r",
+                        e,
+                    )
+            if connected_today is not None:
+                lines.append(
+                    f"• Новых за сегодня: <b>{new_today}</b> (подключились: <b>{connected_today}</b>)"
+                )
+            else:
+                lines.append(
+                    f"• Новых за сегодня: <b>{new_today}</b>"
+                )
             lines.append(
                 f"• Оплатили / триал+промо: <b>{stats.get('paid_active', 0)}</b> / <b>{stats.get('trial_promo_active', 0)}</b>"
             )

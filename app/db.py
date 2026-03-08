@@ -1064,6 +1064,29 @@ def get_referral_admin_stats() -> Dict[str, Any]:
     return result
 
 
+def get_new_active_today_public_keys() -> List[str]:
+    """
+    Возвращает wg_public_key для новых за сегодня (один на пользователя).
+    Нужно для подсчёта «подключились» через handshake.
+    """
+    sql = """
+    SELECT DISTINCT ON (telegram_user_id) wg_public_key
+    FROM vpn_subscriptions
+    WHERE telegram_user_id IS NOT NULL
+      AND active = TRUE
+      AND expires_at > NOW()
+      AND created_at >= CURRENT_DATE
+      AND created_at < CURRENT_DATE + 1
+      AND wg_public_key IS NOT NULL
+    ORDER BY telegram_user_id, id DESC;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return [str(r[0]).strip() for r in rows if r[0]]
+
+
 def get_admin_stats() -> Dict[str, int]:
     """
     Возвращает сводную статистику для админ-диагностики IP-пула и подписок.
