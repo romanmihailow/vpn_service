@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -2523,6 +2524,30 @@ async def cmd_ref(message: Message) -> None:
             lines.append(
                 f"• Активных подписчиков: <b>{stats.get('active_subscribers', 0)}</b>"
             )
+            connected_7d = None
+            try:
+                pairs = db.get_all_active_public_keys_with_users()
+                if pairs:
+                    if hasattr(asyncio, "to_thread"):
+                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                    else:
+                        loop = asyncio.get_running_loop()
+                        handshakes = await loop.run_in_executor(
+                            None, wg.get_handshake_timestamps
+                        )
+                    cutoff = int(time.time()) - 7 * 24 * 3600
+                    connected_7d = sum(
+                        1 for uid, pk in pairs if handshakes.get(pk, 0) >= cutoff
+                    )
+            except Exception as e:
+                log.warning(
+                    "[Referral] Failed to get handshakes for connected_7d: %r",
+                    e,
+                )
+            if connected_7d is not None:
+                lines.append(
+                    f"• Подключились за 7 дн.: <b>{connected_7d}</b>"
+                )
             lines.append(
                 f"• По промокодам: <b>{stats.get('promo_subscribers', 0)}</b>"
             )

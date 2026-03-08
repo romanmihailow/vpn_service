@@ -4,7 +4,7 @@ import psycopg2.pool
 from contextlib import contextmanager
 import contextvars
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 import json
 from .config import settings
 from .logger import get_logger
@@ -1062,6 +1062,27 @@ def get_referral_admin_stats() -> Dict[str, Any]:
                 result["trial_promo_active"] = int(row[0])
 
     return result
+
+
+def get_all_active_public_keys_with_users() -> List[Tuple[int, str]]:
+    """
+    Возвращает (telegram_user_id, wg_public_key) для всех активных подписок,
+    по одному ключу на пользователя. Нужно для подсчёта «подключились за 7 дн.» через handshake.
+    """
+    sql = """
+    SELECT DISTINCT ON (telegram_user_id) telegram_user_id, wg_public_key
+    FROM vpn_subscriptions
+    WHERE telegram_user_id IS NOT NULL
+      AND active = TRUE
+      AND expires_at > NOW()
+      AND wg_public_key IS NOT NULL
+    ORDER BY telegram_user_id, id DESC;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return [(int(r[0]), str(r[1]).strip()) for r in rows if r[0] and r[1]]
 
 
 def get_new_active_today_public_keys() -> List[str]:
