@@ -137,12 +137,59 @@ async def _send_admin_new_user_notification(
         f"• {ref_line}\n"
         f"• Создано: {now}"
     )
-    await safe_send_message(
+    ok = await safe_send_message(
         bot=bot,
         chat_id=admin_id,
         text=text,
         disable_web_page_preview=True,
     )
+    if ok:
+        log.info("[NewUserNotify] Sent for tg_id=%s", telegram_user_id)
+
+
+async def _send_admin_promo_used_notification(
+    bot: Bot,
+    telegram_user_id: int,
+    telegram_username: Optional[str],
+    promo_code: str,
+    extra_days: int,
+    expires_at: datetime,
+) -> None:
+    """
+    Уведомление админу об использовании промокода.
+    """
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if not admin_id:
+        return
+    username = (telegram_username or "").strip()
+    user_line = f"@{username} (ID {telegram_user_id})" if username else f"ID {telegram_user_id}"
+    created_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+    expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if hasattr(expires_at, "strftime") else str(expires_at)[:16]
+    ref_info = db.get_referrer_with_count(telegram_user_id)
+    if ref_info:
+        ref_tg = ref_info.get("referrer_telegram_user_id")
+        ref_name = (ref_info.get("referrer_username") or "").strip()
+        ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+        ref_count = ref_info.get("referred_count") or 0
+        ref_line = f"Реферер: {ref_display} ({ref_count}) | До: {expires_str}"
+    else:
+        ref_line = f"Реферер: — | До: {expires_str}"
+    text = (
+        "🎟 <b>Промокод использован</b>\n\n"
+        f"• Пользователь: {user_line}\n"
+        f"• Промокод: {promo_code}\n"
+        f"• Дней: +{extra_days}\n"
+        f"• {ref_line}\n"
+        f"• Создано: {created_str}"
+    )
+    ok = await safe_send_message(
+        bot=bot,
+        chat_id=admin_id,
+        text=text,
+        disable_web_page_preview=True,
+    )
+    if ok:
+        log.info("[PromoUsedNotify] Sent for tg_id=%s code=%s", telegram_user_id, promo_code)
 
 
 def pluralize_points(n: int) -> str:
@@ -3371,6 +3418,22 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
             else:
                 expires_str = str(expires_at)
 
+            try:
+                await _send_admin_promo_used_notification(
+                    bot=message.bot,
+                    telegram_user_id=user.id,
+                    telegram_username=user.username,
+                    promo_code=promo_code or "",
+                    extra_days=extra_days or 0,
+                    expires_at=expires_at,
+                )
+            except Exception as e:
+                log.warning(
+                    "[PromoUsedNotify] Failed for tg_id=%s: %r",
+                    user.id,
+                    e,
+                )
+
             await message.answer(
                 "✅ Промокод успешно применён.\n\n"
                 f"Тебе выдана новая VPN-подписка на <b>{extra_days} дн.</b>\n"
@@ -3421,6 +3484,23 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         extra_days,
         new_expires_at,
     )
+
+    try:
+        exp_dt = new_expires_at if isinstance(new_expires_at, datetime) else None
+        await _send_admin_promo_used_notification(
+            bot=message.bot,
+            telegram_user_id=user.id,
+            telegram_username=user.username,
+            promo_code=promo_code or "",
+            extra_days=extra_days or 0,
+            expires_at=exp_dt or datetime.now(timezone.utc),
+        )
+    except Exception as e:
+        log.warning(
+            "[PromoUsedNotify] Failed for tg_id=%s: %r",
+            user.id,
+            e,
+        )
 
     if isinstance(new_expires_at, datetime):
         expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
