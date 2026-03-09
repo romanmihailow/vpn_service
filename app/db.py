@@ -1680,6 +1680,77 @@ def get_subscriptions_for_no_handshake_reminder(
             return [dict(r) for r in rows]
 
 
+def get_subscriptions_for_new_handshake_admin() -> List[Dict[str, Any]]:
+    """
+    Подписки (триал/промо), по которым ещё не отправляли админу уведомление
+    «новый подписчик с handshake». Проверка handshake — снаружи (wg).
+    """
+    sql = """
+    SELECT s.*
+    FROM vpn_subscriptions s
+    WHERE s.active = TRUE
+      AND s.expires_at > NOW()
+      AND s.telegram_user_id IS NOT NULL
+      AND s.wg_public_key IS NOT NULL
+      AND (s.last_event_name = 'referral_free_trial_7d' OR s.last_event_name LIKE 'promo%%')
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n
+        WHERE n.subscription_id = s.id AND n.notification_type = 'new_handshake_admin'
+      )
+    ORDER BY s.created_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+def get_referrer_with_count(telegram_user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Для реферала (telegram_user_id) возвращает реферера и количество приглашённых.
+    None если не реферал (нет записи в referrals).
+    """
+    sql = """
+    SELECT r.referrer_telegram_user_id,
+           (SELECT s.telegram_user_name FROM vpn_subscriptions s
+            WHERE s.telegram_user_id = r.referrer_telegram_user_id
+              AND s.telegram_user_name IS NOT NULL AND s.telegram_user_name != ''
+            ORDER BY s.id DESC LIMIT 1) AS referrer_username,
+           (SELECT COUNT(*) FROM referrals rr WHERE rr.referrer_telegram_user_id = r.referrer_telegram_user_id) AS referred_count
+    FROM referrals r
+    WHERE r.referred_telegram_user_id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+
+def get_promo_info_for_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Для подписки по промокоду — возвращает code.
+    None если нет записи в promo_code_usages.
+    """
+    sql = """
+    SELECT pc.code
+    FROM promo_code_usages pcu
+    JOIN promo_codes pc ON pc.id = pcu.promo_code_id
+    WHERE pcu.subscription_id = %s
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (subscription_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+
 def subscription_exists_by_event(event_name: str) -> bool:
     """
     Проверяет, есть ли в базе хотя бы одна запись с таким last_event_name.

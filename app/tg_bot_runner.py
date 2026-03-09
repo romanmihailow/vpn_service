@@ -5748,6 +5748,136 @@ async def auto_revoke_unused_promo_points() -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
 
 
+NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 600  # 10 минут
+
+
+async def auto_new_handshake_admin_notification(bot: Bot) -> None:
+    """
+    Раз в 10 минут проверяет подписки (триал/промо), у которых появился handshake,
+    и отправляет админу одно сводное уведомление.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN):
+        log.info("[NewHandshakeAdmin] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+                if not admin_id:
+                    await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
+                    continue
+
+                handshakes = {}
+                try:
+                    if hasattr(asyncio, "to_thread"):
+                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                    else:
+                        loop = asyncio.get_running_loop()
+                        handshakes = await loop.run_in_executor(
+                            None, wg.get_handshake_timestamps
+                        )
+                except Exception as e:
+                    log.warning("[NewHandshakeAdmin] Failed to get handshakes: %r", e)
+                    await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
+                    continue
+
+                subs = db.get_subscriptions_for_new_handshake_admin()
+                with_handshake = []
+                for sub in subs:
+                    pk = (sub.get("wg_public_key") or "").strip()
+                    if pk and handshakes.get(pk, 0) > 0:
+                        with_handshake.append(sub)
+
+                if not with_handshake:
+                    await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
+                    continue
+
+                def _fmt_exp(dt):
+                    if dt and hasattr(dt, "strftime"):
+                        return dt.strftime("%d.%m.%Y")
+                    return "?"
+
+                trial_lines = []
+                promo_lines = []
+                to_notify = []
+
+                for sub in with_handshake:
+                    sub_id = sub.get("id")
+                    tg_id = sub.get("telegram_user_id")
+                    username = (sub.get("telegram_user_name") or "").strip()
+                    user_line = f"@{username} (ID {tg_id})" if username else f"ID {tg_id}"
+                    expires_str = _fmt_exp(sub.get("expires_at"))
+                    event = sub.get("last_event_name") or ""
+
+                    if event == "referral_free_trial_7d":
+                        ref_info = db.get_referrer_with_count(tg_id)
+                        if ref_info:
+                            ref_tg = ref_info.get("referrer_telegram_user_id")
+                            ref_name = (ref_info.get("referrer_username") or "").strip()
+                            ref_count = ref_info.get("referred_count") or 0
+                            ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+                            trial_lines.append(
+                                f"• {user_line} | Реферер {ref_display} ({ref_count}) | До {expires_str}"
+                            )
+                        else:
+                            trial_lines.append(f"• {user_line} | До {expires_str}")
+                    else:
+                        promo_info = db.get_promo_info_for_subscription(sub_id)
+                        code = promo_info.get("code", "?") if promo_info else "?"
+                        promo_lines.append(f"• {user_line} | {code} | До {expires_str}")
+
+                    to_notify.append((sub_id, tg_id, sub.get("expires_at")))
+
+                parts = [
+                    f"🟢 Новых подписчиков с handshake: <b>{len(with_handshake)}</b>",
+                    "",
+                ]
+                if trial_lines:
+                    parts.append("Триал:")
+                    parts.extend(trial_lines)
+                    parts.append("")
+                if promo_lines:
+                    parts.append("Промо:")
+                    parts.extend(promo_lines)
+
+                text = "\n".join(parts)
+
+                ok = await safe_send_message(
+                    bot=bot,
+                    chat_id=admin_id,
+                    text=text,
+                    disable_web_page_preview=True,
+                )
+                if ok:
+                    for sub_id, tg_id, exp in to_notify:
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type="new_handshake_admin",
+                                telegram_user_id=tg_id,
+                                expires_at=exp,
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "[NewHandshakeAdmin] Failed to record notification sub_id=%s: %r",
+                                sub_id,
+                                e,
+                            )
+                    log.info(
+                        "[NewHandshakeAdmin] Sent notification for %s subs",
+                        len(to_notify),
+                    )
+
+            except Exception as e:
+                log.error("[NewHandshakeAdmin] Unexpected error: %r", e)
+
+            await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
+
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN)
+
+
 async def auto_no_handshake_reminder(bot: Bot) -> None:
     """
     Раз в час проверяет подписки, по которым пользователь ещё не подключался (нет handshake),
@@ -5949,6 +6079,7 @@ async def main() -> None:
     asyncio.create_task(auto_deactivate_expired_subscriptions())
     asyncio.create_task(auto_notify_expiring_subscriptions(bot))
     asyncio.create_task(auto_revoke_unused_promo_points())
+    asyncio.create_task(auto_new_handshake_admin_notification(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
 
     app = create_app()
