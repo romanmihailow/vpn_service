@@ -107,6 +107,44 @@ async def safe_send_message(
         return False
 
 
+async def _send_admin_new_user_notification(
+    bot: Bot,
+    telegram_user_id: int,
+    telegram_username: Optional[str],
+) -> None:
+    """
+    Уведомление админу о новом пользователе (при получении тестового доступа).
+    """
+    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
+    if not admin_id:
+        return
+    username = (telegram_username or "").strip()
+    user_line = f"@{username} (ID {telegram_user_id})" if username else f"ID {telegram_user_id}"
+    now = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+    ref_info = db.get_referrer_with_count(telegram_user_id)
+    if ref_info:
+        ref_tg = ref_info.get("referrer_telegram_user_id")
+        ref_name = (ref_info.get("referrer_username") or "").strip()
+        ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+        ref_count = ref_info.get("referred_count") or 0
+        ref_line = f"Реферер: {ref_display} ({ref_count})"
+    else:
+        ref_line = "Реферер: —"
+    text = (
+        "🆕 <b>Новый пользователь</b>\n\n"
+        f"• {user_line}\n"
+        "• Источник: Реферальный триал\n"
+        f"• {ref_line}\n"
+        f"• Создано: {now}"
+    )
+    await safe_send_message(
+        bot=bot,
+        chat_id=admin_id,
+        text=text,
+        disable_web_page_preview=True,
+    )
+
+
 def pluralize_points(n: int) -> str:
     """Склонение слова 'балл' в зависимости от числа."""
     if n % 10 == 1 and n % 100 != 11:
@@ -2618,6 +2656,19 @@ async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
             telegram_user_id=telegram_user_id,
             telegram_username=user.username,
         )
+        if db.is_user_first_subscription(telegram_user_id):
+            try:
+                await _send_admin_new_user_notification(
+                    bot=callback.bot,
+                    telegram_user_id=telegram_user_id,
+                    telegram_username=user.username,
+                )
+            except Exception as e:
+                log.warning(
+                    "[NewUserNotify] Failed to send admin notification for tg_id=%s: %r",
+                    telegram_user_id,
+                    e,
+                )
         await callback.answer("Доступ выдан! Проверь сообщения выше.")
     except Exception as e:
         log.error(

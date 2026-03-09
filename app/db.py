@@ -1706,6 +1706,21 @@ def get_subscriptions_for_new_handshake_admin() -> List[Dict[str, Any]]:
             return [dict(r) for r in rows]
 
 
+def is_user_first_subscription(telegram_user_id: int) -> bool:
+    """
+    True если у пользователя ровно одна подписка (первый раз в сервисе).
+    """
+    sql = """
+    SELECT COUNT(*) FROM vpn_subscriptions
+    WHERE telegram_user_id = %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            return row is not None and int(row[0] or 0) == 1
+
+
 def get_referrer_with_count(telegram_user_id: int) -> Optional[Dict[str, Any]]:
     """
     Для реферала (telegram_user_id) возвращает реферера и количество приглашённых.
