@@ -1070,7 +1070,7 @@ def get_referral_admin_stats() -> Dict[str, Any]:
 def get_all_active_public_keys_with_users() -> List[Tuple[int, str]]:
     """
     Возвращает (telegram_user_id, wg_public_key) для всех активных подписок,
-    по одному ключу на пользователя. Нужно для подсчёта «подключились за 7 дн.» через handshake.
+    по одному ключу на пользователя. Нужно для подсчёта «handshake за 7 дн.» через handshake.
     """
     sql = """
     SELECT DISTINCT ON (telegram_user_id) telegram_user_id, wg_public_key

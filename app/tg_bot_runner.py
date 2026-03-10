@@ -2633,7 +2633,7 @@ async def cmd_ref(message: Message) -> None:
                 )
             if connected_7d is not None:
                 lines.append(
-                    f"• Подключились за 7 дн.: <b>{connected_7d}</b>"
+                    f"• Handshake за 7 дн.: <b>{connected_7d}</b>"
                 )
             lines.append(
                 f"• По промокодам: <b>{stats.get('promo_subscribers', 0)}</b>"
