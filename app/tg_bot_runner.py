@@ -2352,7 +2352,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             )
 
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
         else:
             expires_str = str(expires_at)
 
@@ -2473,7 +2473,7 @@ async def cmd_status(message: Message) -> None:
     expires_at = sub.get("expires_at")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
     else:
         expires_str = str(expires_at)
 
@@ -3416,7 +3416,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                 return
 
             if isinstance(expires_at, datetime):
-                expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             else:
                 expires_str = str(expires_at)
 
@@ -3505,7 +3505,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         )
 
     if isinstance(new_expires_at, datetime):
-        expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = new_expires_at.strftime("%d.%m.%Y %H:%M")
     else:
         expires_str = str(new_expires_at)
 
@@ -4094,7 +4094,7 @@ async def cmd_admin_last(message: Message) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
     else:
         expires_str = str(expires_at)
 
@@ -4175,7 +4175,7 @@ async def cmd_admin_sub(message: Message) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
     else:
         expires_str = str(expires_at)
 
@@ -4249,7 +4249,7 @@ async def cmd_admin_list(message: Message) -> None:
         expires_at = sub.get("expires_at")
 
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%Y-%m-%d")
+            expires_str = expires_at.strftime("%d.%m.%Y")
         else:
             expires_str = str(expires_at)
 
@@ -4330,7 +4330,7 @@ async def admin_list_sub_details(callback: CallbackQuery) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
     else:
         expires_str = str(expires_at)
 
@@ -5017,7 +5017,7 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         if existing_sub:
             expires_at = existing_sub.get("expires_at")
             if isinstance(expires_at, datetime):
-                expires_str = expires_at.strftime("%Y-%m-%d %H:%M UTC")
+                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
             else:
                 expires_str = str(expires_at)
             await callback.message.edit_text(
@@ -5267,7 +5267,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         + user_line
         + f"VPN IP: <code>{client_ip}</code>\n"
         + f"Срок: <b>{period_label}</b>\n"
-        + f"Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S UTC')}</b>"
+        + f"Действует до: <b>{expires_at.strftime('%d.%m.%Y %H:%M')}</b>"
     )
 
 

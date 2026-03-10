@@ -1072,7 +1072,7 @@ async def send_admin_payment_notification(
         f"{title}\n\n"
         f"• Пользователь: <code>{username_line}</code> (ID {telegram_user_id})\n"
         f"• Тариф: <b>{tariff_code}</b> | Сумма: <b>{amount} ₽</b>\n"
-        f"• Действует до: <b>{expires_at.strftime('%Y-%m-%d %H:%M:%S %Z')}</b>\n"
+        f"• Действует до: <b>{expires_at.strftime('%d.%m.%Y %H:%M')}</b>\n"
         f"• Реферер: {referrer_line}\n"
         f"• Оплат пользователя: ({user_payment_count})\n"
     )

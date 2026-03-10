@@ -157,7 +157,7 @@ async def send_subscription_extended_notification(
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     try:
         # Можно потом заменить формат на локальный, если захочешь
-        expires_str = new_expires_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+        expires_str = new_expires_at.strftime("%d.%m.%Y %H:%M")
 
         text = (
             "✅ Ваша подписка MaxNet VPN продлена.\n\n"
