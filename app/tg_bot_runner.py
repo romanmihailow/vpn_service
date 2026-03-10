@@ -5614,13 +5614,13 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="expires_3d",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
+                    )
                     if ok:
-                        db.create_subscription_notification(
-                            subscription_id=sub_id,
-                            notification_type="expires_3d",
-                            telegram_user_id=telegram_user_id,
-                            expires_at=expires_at,
-                        )
                         log.info(
                             "[AutoNotify] Sent 3d-before-expire notification sub_id=%s tg_id=%s",
                             sub_id,
@@ -5664,13 +5664,13 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="expires_1d",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
+                    )
                     if ok:
-                        db.create_subscription_notification(
-                            subscription_id=sub_id,
-                            notification_type="expires_1d",
-                            telegram_user_id=telegram_user_id,
-                            expires_at=expires_at,
-                        )
                         log.info(
                             "[AutoNotify] Sent 1d-before-expire notification sub_id=%s tg_id=%s",
                             sub_id,
@@ -5732,6 +5732,13 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                             "[AutoNotify] Unexpected error for tg_id=%s (1h notice): %r",
                             telegram_user_id,
                             e,
+                        )
+                        # Записываем, чтобы не повторять попытки (бот заблокирован и т.п.)
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="expires_1h",
+                            telegram_user_id=telegram_user_id,
+                            expires_at=expires_at,
                         )
 
                     batch_count += 1
