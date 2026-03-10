@@ -2015,6 +2015,7 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
         return
 
     telegram_user_id = callback.from_user.id
+    telegram_user_name = getattr(callback.from_user, "username", None) if callback.from_user else None
 
     try:
         confirmation_url = create_yookassa_payment(
@@ -2022,6 +2023,7 @@ async def pay_tariff_callback(callback: CallbackQuery) -> None:
             tariff_code=tariff_code,
             amount=tariff["amount"],
             description=f"MaxNet VPN — {tariff['label']}",
+            telegram_user_name=telegram_user_name,
         )
     except Exception as e:
         log.error(

@@ -1037,10 +1037,8 @@ async def send_admin_payment_notification(
         log.error("[YooKassaWebhook] TELEGRAM_BOT_TOKEN is not set, cannot send admin notification")
         return
 
-    if telegram_user_name:
-        username_line = f"@{telegram_user_name}"
-    else:
-        username_line = "—"
+    username = (telegram_user_name or "").strip() or db.get_telegram_username(telegram_user_id)
+    username_line = f"@{username}" if username else "—"
 
     ref_info = db.get_referrer_with_count(telegram_user_id)
     user_payment_count = db.count_user_paid_subscriptions(telegram_user_id)
