@@ -1,7 +1,7 @@
 import logging
 import os
 
-LOG_DIR = "/app/logs"
+LOG_DIR = os.environ.get("LOG_DIR", "/app/logs")
 VPN_LOG_FILE = os.path.join(LOG_DIR, "vpn_service.log")
 YOOKASSA_LOG_FILE = os.path.join(LOG_DIR, "yookassa.log")
 HELEKET_LOG_FILE = os.path.join(LOG_DIR, "heleket.log")

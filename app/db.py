@@ -154,6 +154,9 @@ def init_db() -> None:
     CREATE INDEX IF NOT EXISTS idx_vpn_subscriptions_user_period
         ON vpn_subscriptions (tribute_user_id, period_id, channel_id);
 
+    CREATE INDEX IF NOT EXISTS idx_vpn_subscriptions_last_event
+        ON vpn_subscriptions (last_event_name);
+
     --------------------------------------------------------------------
     -- Пул IP-адресов WireGuard
     --------------------------------------------------------------------
