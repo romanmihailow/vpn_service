@@ -1745,6 +1745,66 @@ def get_referrer_with_count(telegram_user_id: int) -> Optional[Dict[str, Any]]:
             return dict(row)
 
 
+def count_user_paid_subscriptions(telegram_user_id: int) -> int:
+    """
+    Количество платных подписок пользователя (yookassa/heleket/points).
+    Одна подписка = один платёж.
+    """
+    sql = """
+    SELECT COUNT(*) FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND (
+            last_event_name LIKE 'yookassa_payment_succeeded_%%'
+         OR last_event_name LIKE 'heleket_payment_paid_%%'
+         OR last_event_name LIKE 'points_payment_%%'
+         OR last_event_name LIKE 'points_extend_%%'
+      );
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+
+def count_referrer_paid_referrals(referrer_telegram_user_id: int) -> int:
+    """
+    Количество приглашённых реферером, которые хотя бы раз оплатили (yookassa/heleket).
+    """
+    sql = """
+    SELECT COUNT(DISTINCT r.referred_telegram_user_id)
+    FROM referrals r
+    JOIN vpn_subscriptions s ON s.telegram_user_id = r.referred_telegram_user_id
+    WHERE r.referrer_telegram_user_id = %s
+      AND (
+            s.last_event_name LIKE 'yookassa_payment_succeeded_%%'
+         OR s.last_event_name LIKE 'heleket_payment_paid_%%'
+      );
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (referrer_telegram_user_id,))
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+
+def get_telegram_username(telegram_user_id: int) -> Optional[str]:
+    """
+    Возвращает telegram_user_name из последней подписки пользователя.
+    """
+    sql = """
+    SELECT telegram_user_name FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND telegram_user_name IS NOT NULL AND telegram_user_name != ''
+    ORDER BY id DESC LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+            return (row[0] or None) if row else None
+
+
 def get_promo_info_for_subscription(subscription_id: int) -> Optional[Dict[str, Any]]:
     """
     Для подписки по промокоду — возвращает code.
