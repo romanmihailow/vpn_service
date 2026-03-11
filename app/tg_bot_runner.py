@@ -341,7 +341,8 @@ async def try_give_referral_trial_7d(
             config_text=config_text,
             caption=(
                 "По реферальной ссылке тебе выдан пробный доступ к MaxNet VPN на 7 дней.\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения."
+                "Ниже — конфиг WireGuard и QR для подключения.\n\n"
+                "Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
             ),
         )
 
@@ -6085,7 +6086,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                         f"Ты получил доступ к MaxNet VPN, но пока не подключался.\n\n"
                         f"Подписка действует до {_format_expires(exp)}.\n\n"
                         f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
-                        f"Нужна помощь — @MaxNet_Support"
+                        f"Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
                     )
 
                 def _make_5d_text(sub: dict) -> str:
@@ -6094,7 +6095,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                         f"Подписка MaxNet VPN истекает через {_days_text(days)}.\n\n"
                         f"Ты ещё не подключался.\n\n"
                         f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
-                        f"Помощь: @MaxNet_Support"
+                        f"Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
                     )
 
                 async def _fetch_handshakes():
