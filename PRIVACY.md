@@ -49,5 +49,5 @@ MaxNet VPN не имеет доступа к платёжным реквизит
 
 8. Контакты
 Вопросы по конфиденциальности и данным:
-Telegram: @MaxNet_VPN
-Telegram: @rmw_ok
+Telegram: @MaxNet_VPN — наш канал
+Telegram: @MaxNet_Support — поддержка

@@ -957,7 +957,7 @@ async def cmd_help(message: Message) -> None:
 SUPPORT_TEXT = (
     "Если что-то пошло не так с оплатой или подключением VPN,\n"
     "ты можешь написать в поддержку:\n\n"
-    "• @MaxNet_VPN\n"
+    "• @MaxNet_Support\n"
     "• @rmw_ok\n\n"
     "Опиши проблему, укажи свой @username и, по возможности, приложи скриншоты."
 )
