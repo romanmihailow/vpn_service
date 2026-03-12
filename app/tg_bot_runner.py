@@ -845,10 +845,10 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
 
 REF_LINK_WELCOME_TEXT = (
     "Ты перешёл по реферальной ссылке.\n\n"
-    "Нажми кнопку — получишь 7 дней бесплатно. "
-    "Для подключения понадобится WireGuard: "
-    "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Маркет</a> | "
-    "<a href=\"https://apps.apple.com/app/wireguard/id1441195209\">App Store</a>"
+    "Нажми кнопку — получишь 7 дней бесплатно.\n\n"
+    "Для подключения понадобится WireGuard:\n"
+    "<a href=\"https://apps.apple.com/app/wireguard/id1441195209\">App Store</a> | "
+    "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Маркет</a>"
 )
 
 REF_TRIAL_BUTTON_CALLBACK = "ref_trial:claim"
