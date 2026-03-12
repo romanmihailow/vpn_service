@@ -867,6 +867,7 @@ async def cmd_start(message: Message) -> None:
     выдаём пробный реферальный доступ на 7 дней.
     """
     user = message.from_user
+    log.info("[Start] cmd_start tg_id=%s has_param=%s", user.id if user else None, bool(message.text and len((message.text or "").split(maxsplit=1)) > 1))
 
     # Пытаемся вытащить параметр после /start (deep-link)
     text = message.text or ""
@@ -6242,6 +6243,17 @@ async def main() -> None:
 
     dp = Dispatcher()
     dp.include_router(router)
+
+    # Снимаем webhook, чтобы polling получал апдейты (webhook и polling взаимоисключают друг друга)
+    try:
+        wh_info = await bot.get_webhook_info()
+        if wh_info.url:
+            log.warning("[Startup] Webhook was set (url=%s), deleting to use polling", wh_info.url)
+            await bot.delete_webhook()
+        else:
+            log.info("[Startup] No webhook set, polling will receive updates")
+    except Exception as e:
+        log.error("[Startup] Failed to check/delete webhook: %r", e)
 
     await set_bot_commands(bot)
 
