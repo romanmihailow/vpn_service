@@ -1687,8 +1687,9 @@ def get_subscriptions_for_no_handshake_reminder(
 
 def get_subscriptions_for_new_handshake_admin() -> List[Dict[str, Any]]:
     """
-    Подписки (триал/промо), по которым ещё не отправляли админу уведомление
+    Подписки всех типов, по которым ещё не отправляли админу уведомление
     «новый подписчик с handshake». Проверка handshake — снаружи (wg).
+    Включает триал, промо и платные (ЮKassa, Heleket, баллы).
     """
     sql = """
     SELECT s.*
@@ -1697,7 +1698,6 @@ def get_subscriptions_for_new_handshake_admin() -> List[Dict[str, Any]]:
       AND s.expires_at > NOW()
       AND s.telegram_user_id IS NOT NULL
       AND s.wg_public_key IS NOT NULL
-      AND (s.last_event_name = 'referral_free_trial_7d' OR s.last_event_name LIKE 'promo%%')
       AND NOT EXISTS (
         SELECT 1 FROM subscription_notifications n
         WHERE n.subscription_id = s.id AND n.notification_type = 'new_handshake_admin'

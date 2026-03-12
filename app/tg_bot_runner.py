@@ -5934,6 +5934,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
 
                 trial_lines = []
                 promo_lines = []
+                paid_lines = []
                 to_notify = []
 
                 for sub in with_handshake:
@@ -5956,10 +5957,20 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                             )
                         else:
                             trial_lines.append(f"• {user_line} | До {expires_str}")
-                    else:
+                    elif event.startswith("promo"):
                         promo_info = db.get_promo_info_for_subscription(sub_id)
                         code = promo_info.get("code", "?") if promo_info else "?"
                         promo_lines.append(f"• {user_line} | {code} | До {expires_str}")
+                    else:
+                        if event.startswith("yookassa"):
+                            source = "ЮKassa"
+                        elif event.startswith("heleket"):
+                            source = "Heleket"
+                        elif "points" in event:
+                            source = "баллы"
+                        else:
+                            source = "оплата"
+                        paid_lines.append(f"• {user_line} | {source} | До {expires_str}")
 
                     to_notify.append((sub_id, tg_id, sub.get("expires_at")))
 
@@ -5974,6 +5985,10 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                 if promo_lines:
                     parts.append("Промо:")
                     parts.extend(promo_lines)
+                    parts.append("")
+                if paid_lines:
+                    parts.append("Оплата:")
+                    parts.extend(paid_lines)
 
                 text = "\n".join(parts)
 
