@@ -230,7 +230,7 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
             config_text=config_text,
             caption=(
                 "Спасибо за поддержку через Tribute!\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения к VPN."
+                "Ниже — файл vpn.conf и QR для подключения."
             ),
         )
         log.info("[Telegram] Config sent (donation) to %s", telegram_user_id)
@@ -340,7 +340,7 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
                 telegram_user_id=telegram_user_id,
                 config_text=config_text,
                 caption=(
-                    "Повторно отправляем VPN-конфиг WireGuard и QR-код.\n\n"
+                    "Повторно отправляем файл vpn.conf и QR.\n\n"
                     "Если он уже был у тебя — можно просто использовать старый."
                 ),
             )
@@ -428,7 +428,7 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
             config_text=config_text,
             caption=(
                 "Спасибо за поддержку через Tribute!\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения к VPN."
+                "Ниже — файл vpn.conf и QR для подключения."
             ),
         )
         log.info("[Telegram] Config sent (donation) to %s", telegram_user_id)

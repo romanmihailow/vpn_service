@@ -126,7 +126,8 @@ async def _send_admin_new_user_notification(
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = (ref_info.get("referrer_username") or "").strip()
         ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
-        ref_count = ref_info.get("referred_count") or 0
+        # Порядковый номер реферала (218, 219, 220), а не общий count (220, 220, 220)
+        ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
         ref_line = f"Реферер: {ref_display} ({ref_count})"
     else:
         ref_line = "Реферер: —"
@@ -170,7 +171,7 @@ async def _send_admin_promo_used_notification(
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = (ref_info.get("referrer_username") or "").strip()
         ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
-        ref_count = ref_info.get("referred_count") or 0
+        ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
         ref_line = f"Реферер: {ref_display} ({ref_count}) | До: {expires_str}"
     else:
         ref_line = f"Реферер: — | До: {expires_str}"
@@ -341,8 +342,8 @@ async def try_give_referral_trial_7d(
             config_text=config_text,
             caption=(
                 "По реферальной ссылке тебе выдан пробный доступ к MaxNet VPN на 7 дней.\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения.\n\n"
-                "Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
+                "Ниже — файл vpn.conf и QR для подключения.\n\n"
+                "Вопросы — @MaxNet_Support."
             ),
         )
 
@@ -844,7 +845,10 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
 
 REF_LINK_WELCOME_TEXT = (
     "Ты перешёл по реферальной ссылке.\n\n"
-    "Нажми кнопку, чтобы получить 7 дней пробного доступа бесплатно."
+    "Нажми кнопку — получишь 7 дней бесплатно. "
+    "Для подключения понадобится WireGuard: "
+    "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Маркет</a> | "
+    "<a href=\"https://apps.apple.com/app/wireguard/id1441195209\">App Store</a>"
 )
 
 REF_TRIAL_BUTTON_CALLBACK = "ref_trial:claim"
@@ -922,6 +926,7 @@ async def cmd_start(message: Message) -> None:
                     await message.answer(
                         REF_LINK_WELCOME_TEXT,
                         reply_markup=REF_TRIAL_KEYBOARD,
+                        parse_mode="HTML",
                     )
                     return
                 else:
@@ -2342,7 +2347,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                 config_text=config_text,
                 caption=(
                     "Подписка MaxNet VPN оплачена баллами.\n\n"
-                    "Ниже — конфиг WireGuard и QR для подключения."
+                    "Ниже — файл vpn.conf и QR для подключения."
                 ),
             )
         else:
@@ -2966,7 +2971,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=chat_id,
             config_text=config_text,
-            caption="Повторная отправка конфига MaxNet VPN.\n\nНиже — конфиг WireGuard и QR для подключения.",
+            caption="Повторная отправка конфига MaxNet VPN.\n\nНиже — файл vpn.conf и QR для подключения.",
         )
         log.info(
             "[ConfigResend] Config sent to chat_id=%s sub_id=%s ip=%s",
@@ -3388,7 +3393,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                         config_text=config_text,
                         caption=(
                             "По промокоду тебе выдан доступ к MaxNet VPN.\n\n"
-                            "Ниже — конфиг WireGuard и QR для подключения."
+                            "Ниже — файл vpn.conf и QR для подключения."
                         ),
                     )
                 else:
@@ -4882,7 +4887,7 @@ async def cmd_admin_regenerate_vpn(message: Message) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=telegram_user_id,
             config_text=config_text,
-            caption="Восстановленный доступ к MaxNet VPN. Новый конфиг WireGuard и QR-код.",
+            caption="Восстановленный доступ к MaxNet VPN. Ниже — файл vpn.conf и QR.",
         )
         log.info(
             "[AdminRegenerateVPN] tg_id=%s sub_id=%s: config sent to user",
@@ -4964,7 +4969,7 @@ async def cmd_admin_resend_config(message: Message) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=telegram_user_id,
             config_text=config_text,
-            caption="Повторная отправка конфига MaxNet VPN. Ниже — конфиг WireGuard и QR-код.",
+            caption="Повторная отправка конфига MaxNet VPN. Ниже — файл vpn.conf и QR.",
         )
         log.info(
             "[AdminResendConfig] tg_id=%s sub_id=%s: config resent",
@@ -5233,7 +5238,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             config_text=config_text,
             caption=(
                 "Администратор выдал тебе доступ к MaxNet VPN.\n\n"
-                "Ниже — конфиг WireGuard и QR для подключения."
+                "Ниже — файл vpn.conf и QR для подключения."
             ),
         )
         log.info("[Telegram] Manual config sent to %s", target_id)
@@ -5956,7 +5961,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         if ref_info:
                             ref_tg = ref_info.get("referrer_telegram_user_id")
                             ref_name = (ref_info.get("referrer_username") or "").strip()
-                            ref_count = ref_info.get("referred_count") or 0
+                            ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
                             ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
                             trial_lines.append(
                                 f"• {user_line} | Реферер {ref_display} ({ref_count}) | До {expires_str}"
@@ -6022,7 +6027,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
 async def auto_no_handshake_reminder(bot: Bot) -> None:
     """
     Раз в час проверяет подписки, по которым пользователь ещё не подключался (нет handshake),
-    и отправляет напоминание: через 24h и через 5 дней.
+    и отправляет напоминание: через 2h, через 24h и через 5 дней.
     Пауза 5 сек между отправками, обработка блокировки/удаления бота.
     """
     if not db.acquire_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER):
@@ -6080,22 +6085,31 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                 def _not_connected(pubkey: str) -> bool:
                     return handshakes.get(pubkey, 0) == 0
 
+                def _make_2h_text(sub: dict) -> str:
+                    return (
+                        "Ты получил пробный доступ к MaxNet VPN.\n\n"
+                        "Подключение: открой файл vpn.conf из сообщения выше → «Поделиться» → WireGuard (iPhone) "
+                        "или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
+                        "Не получается? Пиши @MaxNet_Support, поможем."
+                    )
+
                 def _make_24h_text(sub: dict) -> str:
                     exp = sub.get("expires_at")
                     return (
                         f"Ты получил доступ к MaxNet VPN, но пока не подключался.\n\n"
                         f"Подписка действует до {_format_expires(exp)}.\n\n"
-                        f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
-                        f"Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
+                        f"Не нашёл конфиг? Нажми кнопку ниже.\n"
+                        f"Импорт: «Поделиться» → WireGuard (iPhone) или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
+                        f"Вопросы — @MaxNet_Support."
                     )
 
                 def _make_5d_text(sub: dict) -> str:
                     days = _days_until_expiry(sub.get("expires_at"))
                     return (
                         f"Подписка MaxNet VPN истекает через {_days_text(days)}.\n\n"
-                        f"Ты ещё не подключался.\n\n"
-                        f"Файл для подключения — /status → кнопка «Получить настройки».\n\n"
-                        f"Мы понимаем, что не всем удаётся разобраться с подключением — пишите в поддержку @MaxNet_Support, поможем."
+                        f"Ты ещё не подключался. Не нашёл конфиг? Нажми кнопку ниже.\n"
+                        f"Импорт: «Поделиться» → WireGuard (iPhone) или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
+                        f"Вопросы — @MaxNet_Support."
                     )
 
                 async def _fetch_handshakes():
@@ -6105,6 +6119,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     return await loop.run_in_executor(None, wg.get_handshake_timestamps)
 
                 BATCHES = [
+                    ("no_handshake_2h", _make_2h_text),
                     ("no_handshake_24h", _make_24h_text),
                     ("no_handshake_5d", _make_5d_text),
                 ]
@@ -6155,11 +6170,22 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                             continue
 
                         text = make_text(sub)
+                        keyboard = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text="📱 Получить настройки",
+                                        callback_data=f"config:resend:{sub_id}",
+                                    ),
+                                ],
+                            ]
+                        )
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=telegram_user_id,
                             text=text,
                             disable_web_page_preview=True,
+                            reply_markup=keyboard,
                         )
                         if ok:
                             stats_sent += 1

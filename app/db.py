@@ -1648,9 +1648,11 @@ def get_subscriptions_for_no_handshake_reminder(
     """
     Возвращает активные подписки для напоминания «ты ещё не подключался».
     Только триал и промо (referral_free_trial_7d, promo*), платным не шлём.
-    reminder_type: 'no_handshake_24h' (созданы >= 24h) или 'no_handshake_5d' (>= 5 дней).
+    reminder_type: 'no_handshake_2h' (>= 2h), 'no_handshake_24h' (>= 24h), 'no_handshake_5d' (>= 5 дней).
     """
-    if reminder_type == "no_handshake_24h":
+    if reminder_type == "no_handshake_2h":
+        hours = 2
+    elif reminder_type == "no_handshake_24h":
         hours = 24
     elif reminder_type == "no_handshake_5d":
         hours = 5 * 24
@@ -1728,6 +1730,7 @@ def get_referrer_with_count(telegram_user_id: int) -> Optional[Dict[str, Any]]:
     """
     Для реферала (telegram_user_id) возвращает реферера и количество приглашённых.
     None если не реферал (нет записи в referrals).
+    referral_ordinal — порядковый номер этого реферала среди приглашённых (1-based).
     """
     sql = """
     SELECT r.referrer_telegram_user_id,
@@ -1735,7 +1738,12 @@ def get_referrer_with_count(telegram_user_id: int) -> Optional[Dict[str, Any]]:
             WHERE s.telegram_user_id = r.referrer_telegram_user_id
               AND s.telegram_user_name IS NOT NULL AND s.telegram_user_name != ''
             ORDER BY s.id DESC LIMIT 1) AS referrer_username,
-           (SELECT COUNT(*) FROM referrals rr WHERE rr.referrer_telegram_user_id = r.referrer_telegram_user_id) AS referred_count
+           (SELECT COUNT(*) FROM referrals rr WHERE rr.referrer_telegram_user_id = r.referrer_telegram_user_id) AS referred_count,
+           (SELECT COUNT(*) FROM referrals rr
+            WHERE rr.referrer_telegram_user_id = r.referrer_telegram_user_id
+              AND (rr.created_at < r.created_at
+                   OR (rr.created_at = r.created_at
+                       AND rr.referred_telegram_user_id <= r.referred_telegram_user_id))) AS referral_ordinal
     FROM referrals r
     WHERE r.referred_telegram_user_id = %s;
     """
