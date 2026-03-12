@@ -312,7 +312,7 @@ async def process_heleket_event(data: dict) -> None:
                 config_text=config_text,
                 caption=(
                     "Спасибо за оплату подписки MaxNet VPN через Heleket!\n\n"
-                    "Ниже — файл vpn.conf и QR для подключения."
+                    "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                 ),
             )
         except Exception as e:
@@ -1035,7 +1035,7 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             config_text=config_text,
             caption=(
                 "Оплата через Heleket прошла успешно.\n\n"
-                "Ниже — файл vpn.conf и QR для подключения."
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
             ),
         )
         log.info("[HeleketWebhook] config sent to tg_id=%s", telegram_user_id)

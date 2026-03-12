@@ -102,7 +102,7 @@ async def send_vpn_config_to_user(
         if caption is None:
             caption = (
                 "Спасибо за подписку через Tribute!\n\n"
-                "Ниже — файл vpn.conf и QR для подключения 👇"
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем 👇"
             )
 
         # 1. Конфиг как файл

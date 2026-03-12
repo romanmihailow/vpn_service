@@ -342,7 +342,7 @@ async def try_give_referral_trial_7d(
             config_text=config_text,
             caption=(
                 "По реферальной ссылке тебе выдан пробный доступ к MaxNet VPN на 7 дней.\n\n"
-                "Ниже — файл vpn.conf и QR для подключения.\n\n"
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем.\n\n"
                 "Вопросы — @MaxNet_Support."
             ),
         )
@@ -2347,7 +2347,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                 config_text=config_text,
                 caption=(
                     "Подписка MaxNet VPN оплачена баллами.\n\n"
-                    "Ниже — файл vpn.conf и QR для подключения."
+                    "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                 ),
             )
         else:
@@ -2971,7 +2971,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=chat_id,
             config_text=config_text,
-            caption="Повторная отправка конфига MaxNet VPN.\n\nНиже — файл vpn.conf и QR для подключения.",
+            caption="Повторная отправка конфига MaxNet VPN.\n\nФайл vpn.conf — в этом сообщении. QR-код — в следующем.",
         )
         log.info(
             "[ConfigResend] Config sent to chat_id=%s sub_id=%s ip=%s",
@@ -3393,7 +3393,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                         config_text=config_text,
                         caption=(
                             "По промокоду тебе выдан доступ к MaxNet VPN.\n\n"
-                            "Ниже — файл vpn.conf и QR для подключения."
+                            "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                         ),
                     )
                 else:
@@ -4887,7 +4887,7 @@ async def cmd_admin_regenerate_vpn(message: Message) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=telegram_user_id,
             config_text=config_text,
-            caption="Восстановленный доступ к MaxNet VPN. Ниже — файл vpn.conf и QR.",
+            caption="Восстановленный доступ к MaxNet VPN. Файл vpn.conf — в этом сообщении. QR-код — в следующем.",
         )
         log.info(
             "[AdminRegenerateVPN] tg_id=%s sub_id=%s: config sent to user",
@@ -4969,7 +4969,7 @@ async def cmd_admin_resend_config(message: Message) -> None:
         await send_vpn_config_to_user(
             telegram_user_id=telegram_user_id,
             config_text=config_text,
-            caption="Повторная отправка конфига MaxNet VPN. Ниже — файл vpn.conf и QR.",
+            caption="Повторная отправка конфига MaxNet VPN. Файл vpn.conf — в этом сообщении. QR-код — в следующем.",
         )
         log.info(
             "[AdminResendConfig] tg_id=%s sub_id=%s: config resent",
@@ -5238,7 +5238,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
             config_text=config_text,
             caption=(
                 "Администратор выдал тебе доступ к MaxNet VPN.\n\n"
-                "Ниже — файл vpn.conf и QR для подключения."
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
             ),
         )
         log.info("[Telegram] Manual config sent to %s", target_id)

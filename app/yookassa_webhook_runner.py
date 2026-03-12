@@ -677,7 +677,7 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                     config_text=config_text,
                     caption=(
                         "Спасибо за оплату подписки MaxNet VPN через ЮKassa!\n\n"
-                        "Ниже — файл vpn.conf и QR для подключения."
+                        "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                     ),
                 )
             except Exception as e:

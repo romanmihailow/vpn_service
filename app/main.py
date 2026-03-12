@@ -230,7 +230,7 @@ async def handle_new_subscription(payload: Dict[str, Any]) -> None:
             config_text=config_text,
             caption=(
                 "Спасибо за поддержку через Tribute!\n\n"
-                "Ниже — файл vpn.conf и QR для подключения."
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
             ),
         )
         log.info("[Telegram] Config sent (donation) to %s", telegram_user_id)
@@ -428,7 +428,7 @@ async def handle_new_donation(payload: Dict[str, Any], created_at_str: str) -> N
             config_text=config_text,
             caption=(
                 "Спасибо за поддержку через Tribute!\n\n"
-                "Ниже — файл vpn.conf и QR для подключения."
+                "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
             ),
         )
         log.info("[Telegram] Config sent (donation) to %s", telegram_user_id)
