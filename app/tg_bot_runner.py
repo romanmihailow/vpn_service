@@ -717,11 +717,9 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="🔐 Подключить VPN",
+                text="🛒 Купить подписку",
                 callback_data="pay:open",
             ),
-        ],
-        [
             InlineKeyboardButton(
                 text="🎮 Оплатить баллами",
                 callback_data="points:open",
@@ -732,14 +730,6 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
                 text="🎟 Ввести промокод",
                 callback_data="promo:open",
             ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="💳 Вывести",
-                callback_data="withdraw:open",
-            ),
-        ],
-        [
             InlineKeyboardButton(
                 text="🌐 Открыть сайт",
                 url="https://maxnetvpn.ru",
@@ -818,11 +808,15 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔁 Продлить подписку",
-                    callback_data="pay:open",
+                    text="📱 Получить настройки",
+                    callback_data=f"config:resend:{sub_id}",
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    text="🔁 Продлить подписку",
+                    callback_data="pay:open",
+                ),
                 InlineKeyboardButton(
                     text="🎮 Продлить баллами",
                     callback_data="points:open",
@@ -834,18 +828,12 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
                     callback_data="ref:open_from_notify",
                 ),
             ],
-            [
-                InlineKeyboardButton(
-                    text="📱 Получить настройки",
-                    callback_data=f"config:resend:{sub_id}",
-                ),
-            ],
         ]
     )
 
 REF_LINK_WELCOME_TEXT = (
     "Ты перешёл по реферальной ссылке.\n\n"
-    "Нажми кнопку — получишь 7 дней бесплатно.\n\n"
+    "Чтобы получить тестовый доступ, нажми кнопку ниже.\n\n"
     "Для подключения понадобится WireGuard:\n"
     "<a href=\"https://apps.apple.com/app/wireguard/id1441195209\">App Store</a> | "
     "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Маркет</a>"
