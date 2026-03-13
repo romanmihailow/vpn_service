@@ -14,6 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification, send_referral_reward_notification
+from .format_admin import fmt_user_line, fmt_ref_display
 from .config import settings
 
 from .logger import get_yookassa_logger
@@ -1048,7 +1049,7 @@ async def send_admin_payment_notification(
         return
 
     username = (telegram_user_name or "").strip() or db.get_telegram_username(telegram_user_id)
-    username_line = f"@{username}" if username else "—"
+    user_line = fmt_user_line(username, telegram_user_id)
 
     ref_info = db.get_referrer_with_count(telegram_user_id)
     user_payment_count = db.count_user_paid_subscriptions(telegram_user_id)
@@ -1056,10 +1057,10 @@ async def send_admin_payment_notification(
     if ref_info:
         ref_username = ref_info.get("referrer_username")
         ref_id = ref_info.get("referrer_telegram_user_id")
-        ref_name = f"@{ref_username}" if ref_username else f"ID {ref_id}"
+        ref_display = fmt_ref_display(ref_username, ref_id)
         referred_count = int(ref_info.get("referred_count") or 0)
         paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
-        referrer_line = f"{ref_name} ({referred_count}/{paid_count})"
+        referrer_line = f"{ref_display} ({referred_count}/{paid_count})"
     else:
         referrer_line = "—"
 
@@ -1070,7 +1071,7 @@ async def send_admin_payment_notification(
 
     text = (
         f"{title}\n\n"
-        f"• Пользователь: <code>{username_line}</code> (ID {telegram_user_id})\n"
+        f"• Пользователь: {user_line}\n"
         f"• Тариф: <b>{tariff_code}</b> | Сумма: <b>{amount} ₽</b>\n"
         f"• Действует до: <b>{expires_at.strftime('%d.%m.%Y %H:%M')}</b>\n"
         f"• Реферер: {referrer_line}\n"

@@ -27,6 +27,7 @@ from .bot import (
     send_subscription_expired_notification,
 )
 from . import wg
+from .format_admin import fmt_user_line, fmt_ref_display
 from .logger import get_logger, get_promo_logger
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
@@ -118,14 +119,13 @@ async def _send_admin_new_user_notification(
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
     if not admin_id:
         return
-    username = (telegram_username or "").strip()
-    user_line = f"@{username} (ID {telegram_user_id})" if username else f"ID {telegram_user_id}"
+    user_line = fmt_user_line(telegram_username, telegram_user_id)
     now = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
     ref_info = db.get_referrer_with_count(telegram_user_id)
     if ref_info:
         ref_tg = ref_info.get("referrer_telegram_user_id")
-        ref_name = (ref_info.get("referrer_username") or "").strip()
-        ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+        ref_name = ref_info.get("referrer_username")
+        ref_display = fmt_ref_display(ref_name, ref_tg)
         # Порядковый номер реферала (218, 219, 220), а не общий count (220, 220, 220)
         ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
         ref_line = f"Реферер: {ref_display} ({ref_count})"
@@ -162,15 +162,14 @@ async def _send_admin_promo_used_notification(
     admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
     if not admin_id:
         return
-    username = (telegram_username or "").strip()
-    user_line = f"@{username} (ID {telegram_user_id})" if username else f"ID {telegram_user_id}"
+    user_line = fmt_user_line(telegram_username, telegram_user_id)
     created_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
     expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if hasattr(expires_at, "strftime") else str(expires_at)[:16]
     ref_info = db.get_referrer_with_count(telegram_user_id)
     if ref_info:
         ref_tg = ref_info.get("referrer_telegram_user_id")
-        ref_name = (ref_info.get("referrer_username") or "").strip()
-        ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+        ref_name = ref_info.get("referrer_username")
+        ref_display = fmt_ref_display(ref_name, ref_tg)
         ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
         ref_line = f"Реферер: {ref_display} ({ref_count}) | До: {expires_str}"
     else:
@@ -5953,8 +5952,8 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                 for sub in with_handshake:
                     sub_id = sub.get("id")
                     tg_id = sub.get("telegram_user_id")
-                    username = (sub.get("telegram_user_name") or "").strip()
-                    user_line = f"@{username} (ID {tg_id})" if username else f"ID {tg_id}"
+                    username = sub.get("telegram_user_name")
+                    user_line = fmt_user_line(username, tg_id)
                     expires_str = _fmt_exp(sub.get("expires_at"))
                     event = sub.get("last_event_name") or ""
 
@@ -5962,9 +5961,9 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         ref_info = db.get_referrer_with_count(tg_id)
                         if ref_info:
                             ref_tg = ref_info.get("referrer_telegram_user_id")
-                            ref_name = (ref_info.get("referrer_username") or "").strip()
+                            ref_name = ref_info.get("referrer_username")
                             ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
-                            ref_display = f"@{ref_name}" if ref_name else f"ID {ref_tg}"
+                            ref_display = fmt_ref_display(ref_name, ref_tg)
                             trial_lines.append(
                                 f"• {user_line} | Реферер {ref_display} ({ref_count}) | До {expires_str}"
                             )
