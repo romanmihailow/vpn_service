@@ -50,4 +50,4 @@ MaxNet VPN не имеет доступа к платёжным реквизит
 8. Контакты
 Вопросы по конфиденциальности и данным:
 Telegram: @MaxNet_VPN — наш канал
-Telegram: @MaxNet_Support — поддержка
+Telegram: @MaxNet_VPN_Support — поддержка

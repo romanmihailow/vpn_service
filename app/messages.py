@@ -47,7 +47,7 @@ DEFAULT_CONFIG_CAPTION = (
 
 # === Кнопка помощи после выдачи конфига ===
 SUPPORT_BUTTON_TEXT = "🧑‍💻 Нужна помощь"
-SUPPORT_URL = "https://t.me/MaxNet_Support"
+SUPPORT_URL = "https://t.me/MaxNet_VPN_Support"
 
 # === /help — короткая инструкция без привязки к «я отправил» ===
 HELP_INSTRUCTION = (
@@ -57,5 +57,5 @@ HELP_INSTRUCTION = (
     "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Market</a>\n\n"
     "2. Получи конфиг от бота (кнопка «Получить тестовый доступ» или после оплаты).\n\n"
     "3. В WireGuard: нажми «+» → Импорт из файла или Сканировать QR-код.\n\n"
-    "Если статус Connected — VPN работает. Вопросы: @MaxNet_Support"
+    "Если статус Connected — VPN работает. Вопросы: @MaxNet_VPN_Support"
 )
