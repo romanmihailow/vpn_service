@@ -22,9 +22,14 @@ from aiogram.fsm.context import FSMContext
 from .config import settings
 from . import db
 from .bot import (
-    INSTRUCTION_TEXT,
     send_vpn_config_to_user,
     send_subscription_expired_notification,
+)
+from .messages import (
+    HELP_INSTRUCTION,
+    REF_LINK_WELCOME_TEXT,
+    REF_TRIAL_BUTTON_TEXT,
+    REF_TRIAL_CONFIG_CAPTION,
 )
 from . import wg
 from .format_admin import fmt_date, fmt_ref_display, fmt_user_line
@@ -349,11 +354,7 @@ async def try_give_referral_trial_7d(
         await send_vpn_config_to_user(
             telegram_user_id=telegram_user_id,
             config_text=config_text,
-            caption=(
-                "По реферальной ссылке тебе выдан пробный доступ к MaxNet VPN на 7 дней.\n\n"
-                "Файл vpn.conf — в этом сообщении. QR-код — в следующем.\n\n"
-                "Вопросы — @MaxNet_Support."
-            ),
+            caption=REF_TRIAL_CONFIG_CAPTION,
         )
 
     except Exception as e:
@@ -763,7 +764,7 @@ REF_TRIAL_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
             InlineKeyboardButton(
-                text="Получить тестовый доступ",
+                text=REF_TRIAL_BUTTON_TEXT,
                 callback_data="ref_trial:claim",
             ),
         ],
@@ -779,7 +780,7 @@ def get_start_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text="Получить тестовый доступ",
+                text=REF_TRIAL_BUTTON_TEXT,
                 callback_data="ref_trial:claim",
             ),
         ],
@@ -839,14 +840,6 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
-
-REF_LINK_WELCOME_TEXT = (
-    "Ты перешёл по реферальной ссылке.\n\n"
-    "Чтобы получить тестовый доступ, нажми кнопку ниже.\n\n"
-    "Для подключения понадобится WireGuard:\n"
-    "<a href=\"https://apps.apple.com/app/wireguard/id1441195209\">App Store</a> | "
-    "<a href=\"https://play.google.com/store/apps/details?id=com.wireguard.android\">Play Маркет</a>"
-)
 
 REF_TRIAL_BUTTON_CALLBACK = "ref_trial:claim"
 
@@ -919,7 +912,7 @@ async def cmd_start(message: Message) -> None:
                     raw_start_param=text,
                 )
 
-                # 4. Если регистрация успешна — показываем экран «получить триал по кнопке» (без авто-выдачи)
+                # 4. Если регистрация успешна — показываем onboarding и кнопку триала
                 if reg_res and reg_res.get("ok"):
                     await message.answer(
                         REF_LINK_WELCOME_TEXT,
@@ -927,13 +920,25 @@ async def cmd_start(message: Message) -> None:
                         parse_mode="HTML",
                     )
                     return
-                else:
-                    log.info(
-                        "[Referral] register_referral_start returned not ok for tg_id=%s param=%r res=%r",
-                        user.id,
-                        start_param,
-                        reg_res,
+                # 4b. Уже есть реферер, но есть активная подписка — показываем onboarding,
+                #     чтобы пользователь мог повторно получить конфиг
+                if reg_res and reg_res.get("error") == "already_has_referrer":
+                    active_sub = db.get_latest_subscription_for_telegram(
+                        telegram_user_id=user.id,
                     )
+                    if active_sub and active_sub.get("active"):
+                        await message.answer(
+                            REF_LINK_WELCOME_TEXT,
+                            reply_markup=REF_TRIAL_KEYBOARD,
+                            parse_mode="HTML",
+                        )
+                        return
+                log.info(
+                    "[Referral] register_referral_start returned not ok for tg_id=%s param=%r res=%r",
+                    user.id,
+                    start_param,
+                    reg_res,
+                )
 
         except Exception as e:
             log.error(
@@ -952,7 +957,7 @@ async def cmd_start(message: Message) -> None:
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     await message.answer(
-        INSTRUCTION_TEXT,
+        HELP_INSTRUCTION,
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
@@ -2691,7 +2696,10 @@ async def cmd_ref(message: Message) -> None:
 @router.callback_query(F.data == "ref_trial:claim")
 async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
     """
-    Кнопка «Получить тестовый доступ» — выдаём реферальный триал по запросу.
+    Кнопка «Получить тестовый доступ»:
+    - если уже есть активная подписка (trial) — повторно отправить конфиг;
+    - иначе если можно получить триал — создать и отправить;
+    - иначе — отказать.
     """
     user = callback.from_user
     if user is None:
@@ -2699,6 +2707,38 @@ async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
         return
 
     telegram_user_id = user.id
+
+    # 1. Уже есть активная подписка и реферер — повторно отправить конфиг
+    if db.get_referrer_telegram_id(telegram_user_id) is not None:
+        active_sub = db.get_latest_subscription_for_telegram(
+            telegram_user_id=telegram_user_id,
+        )
+        if active_sub and active_sub.get("active"):
+            try:
+                config_text = wg.build_client_config(
+                    client_private_key=active_sub.get("wg_private_key"),
+                    client_ip=active_sub.get("vpn_ip"),
+                )
+                await send_vpn_config_to_user(
+                    telegram_user_id=telegram_user_id,
+                    config_text=config_text,
+                    caption=REF_TRIAL_CONFIG_CAPTION,
+                )
+                await callback.answer("Настройки отправлены! Проверь сообщения выше.")
+                return
+            except Exception as e:
+                log.error(
+                    "[ReferralTrial] Failed to resend config for tg_id=%s: %r",
+                    telegram_user_id,
+                    e,
+                )
+                await callback.answer(
+                    "Не удалось отправить настройки. Попробуй позже.",
+                    show_alert=True,
+                )
+                return
+
+    # 2. Не может получить триал — отказать
     if not db.user_can_claim_referral_trial(telegram_user_id):
         await callback.answer(
             "Ты уже получал реферальный триал или у тебя есть активная подписка.",
@@ -2706,6 +2746,7 @@ async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
         )
         return
 
+    # 3. Создать триал и отправить конфиг
     try:
         await try_give_referral_trial_7d(
             telegram_user_id=telegram_user_id,

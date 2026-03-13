@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 from typing import Optional
@@ -8,67 +9,16 @@ from aiogram.types import BufferedInputFile
 
 from .config import settings
 from .format_admin import fmt_date
+from .messages import (
+    CONFIG_QR_CAPTION,
+    CONNECTION_INSTRUCTION_SHORT,
+    DEFAULT_CONFIG_CAPTION,
+)
 import qrcode
 
 log = logging.getLogger(__name__)
 
-
-
-INSTRUCTION_TEXT = """
-📱 Инструкция: подключение телефона к VPN (WireGuard)
-
-<b>Шаг 1.</b> Установить приложение WireGuard
-
-<b>Android</b>:
-<a href="https://play.google.com/store/apps/details?id=com.wireguard.android">Перейти в Play Маркет</a>
-
-<b>iPhone</b>:
-<a href="https://apps.apple.com/app/wireguard/id1441195209">Перейти в App Store</a>
-
-<b>Шаг 2.</b> Получить конфигурацию VPN
-Тебе пришли файл vpn.conf и QR-код от бота.
-
-<b>Вариант A — из файла</b> (для одного телефона)
-
-<b>Android</b>:
-1. Скачать файл vpn.conf из сообщения бота
-2. Открыть WireGuard → «+»
-3. <b>Импорт из файла или архива</b>
-4. Выбрать файл → Добавить
-5. Ввести имя туннеля (например, MaxNet_VPN)
-6. Сохранить
-7. Включить VPN
-
-<b>iPhone</b>:
-1. Открыть файл vpn.conf (Файлы или Telegram)
-2. «Поделиться» → WireGuard
-3. Создать туннель из файла или архива
-4. Ввести имя туннеля (например, MaxNet_VPN)
-5. Сохранить
-6. Включить VPN
-
-<b>Вариант B — QR-код</b>
-(удобно при двух устройствах: WG сканирует только с камеры, из фото — нельзя)
-
-1. WireGuard → «+» → «Сканировать QR-код»
-2. Навести камеру на QR (на другом экране)
-3. Ввести имя туннеля (например, MaxNet_VPN)
-4. Сохранить
-5. Включить VPN
-
-Если всё ок — зелёный статус <b>Connected</b>.
-
-<b>Шаг 3.</b> Проверить VPN
-Открыть в браузере: https://ifconfig.me
-Увидишь IP сервера — значит VPN работает.
-
-⚠️ Частые ошибки:
-
-• <b>QR не сканируется</b> — используй импорт из файла (вариант A)
-• <b>Не включается</b> — проверь интернет (Wi-Fi / 4G)
-• <b>Нет интернета после VPN</b> — перезапусти телефон или VPN
-• <b>Ошибка соединения</b> — перезапусти приложение. Не помогло — @MaxNet_Support
-""".strip()
+CONFIG_SEND_DELAY_SEC = 0.7
 
 
 def generate_qr_image_bytes(config_text: str) -> bytes:
@@ -95,16 +45,15 @@ async def send_vpn_config_to_user(
     Отправляем пользователю:
     1) конфиг файлом
     2) QR-код
-    3) инструкцию
+    3) короткую инструкцию
+
+    Между сообщениями задержка ~0.7 сек для последовательного чтения.
     """
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 
     try:
         if caption is None:
-            caption = (
-                "Спасибо за подписку через Tribute!\n\n"
-                "Файл vpn.conf — в этом сообщении. QR-код — в следующем 👇"
-            )
+            caption = DEFAULT_CONFIG_CAPTION
 
         # 1. Конфиг как файл
         cfg_bytes = config_text.encode("utf-8")
@@ -115,6 +64,7 @@ async def send_vpn_config_to_user(
             caption=caption,
         )
         log.info("[SendConfig] Document sent to tg_id=%s", telegram_user_id)
+        await asyncio.sleep(CONFIG_SEND_DELAY_SEC)
 
         # 2. QR-код
         qr_bytes = generate_qr_image_bytes(config_text)
@@ -122,15 +72,16 @@ async def send_vpn_config_to_user(
         await bot.send_photo(
             chat_id=telegram_user_id,
             photo=qr_file,
-            caption="Отсканируй QR (нужен второй телефон) или импортируй файл из сообщения выше 👆",
+            caption=CONFIG_QR_CAPTION,
         )
         log.info("[SendConfig] QR photo sent to tg_id=%s", telegram_user_id)
+        await asyncio.sleep(CONFIG_SEND_DELAY_SEC)
 
-        # 3. Инструкция
+        # 3. Короткая инструкция
         await bot.send_message(
             chat_id=telegram_user_id,
-            text=INSTRUCTION_TEXT,
-            parse_mode="HTML",
+            text=CONNECTION_INSTRUCTION_SHORT,
+            parse_mode=None,
             disable_web_page_preview=True,
         )
         log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
