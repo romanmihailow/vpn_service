@@ -27,7 +27,7 @@ from .bot import (
     send_subscription_expired_notification,
 )
 from . import wg
-from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
+from .format_admin import fmt_date, fmt_ref_display, fmt_user_line
 from .logger import get_logger, get_promo_logger
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
@@ -1382,7 +1382,7 @@ async def cmd_demo(message: Message, state: FSMContext) -> None:
     if active_sub:
         expires_at = active_sub.get("expires_at")
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%d.%m.%Y")
+            expires_str = fmt_date(expires_at, with_time=False)
         else:
             expires_str = str(expires_at)
         await message.answer(
@@ -1939,7 +1939,7 @@ async def promo_admin_confirm_callback(callback: CallbackQuery, state: FSMContex
     # Формируем информацию о сроке действия
     valid_until_row = promo_rows[0].get("valid_until") if promo_rows else None
     if valid_until_row:
-        valid_until_str = valid_until_row.strftime("%d.%m.%Y %H:%M")
+        valid_until_str = fmt_date(valid_until_row)
         valid_info = f"⏰ Применить до: <b>{valid_until_str}</b>"
     else:
         valid_info = "⏰ Срок применения: <b>без ограничения</b>"
@@ -2358,7 +2358,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             )
 
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+            expires_str = fmt_date(expires_at)
         else:
             expires_str = str(expires_at)
 
@@ -2479,7 +2479,7 @@ async def cmd_status(message: Message) -> None:
     expires_at = sub.get("expires_at")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        expires_str = fmt_date(expires_at)
     else:
         expires_str = str(expires_at)
 
@@ -3424,7 +3424,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                 return
 
             if isinstance(expires_at, datetime):
-                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+                expires_str = fmt_date(expires_at)
             else:
                 expires_str = str(expires_at)
 
@@ -3513,7 +3513,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         )
 
     if isinstance(new_expires_at, datetime):
-        expires_str = new_expires_at.strftime("%d.%m.%Y %H:%M")
+        expires_str = new_fmt_date(expires_at)
     else:
         expires_str = str(new_expires_at)
 
@@ -4102,7 +4102,7 @@ async def cmd_admin_last(message: Message) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        expires_str = fmt_date(expires_at)
     else:
         expires_str = str(expires_at)
 
@@ -4183,7 +4183,7 @@ async def cmd_admin_sub(message: Message) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        expires_str = fmt_date(expires_at)
     else:
         expires_str = str(expires_at)
 
@@ -4257,7 +4257,7 @@ async def cmd_admin_list(message: Message) -> None:
         expires_at = sub.get("expires_at")
 
         if isinstance(expires_at, datetime):
-            expires_str = expires_at.strftime("%d.%m.%Y")
+            expires_str = fmt_date(expires_at, with_time=False)
         else:
             expires_str = str(expires_at)
 
@@ -4338,7 +4338,7 @@ async def admin_list_sub_details(callback: CallbackQuery) -> None:
     last_event_name = sub.get("last_event_name")
 
     if isinstance(expires_at, datetime):
-        expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+        expires_str = fmt_date(expires_at)
     else:
         expires_str = str(expires_at)
 
@@ -5025,7 +5025,7 @@ async def demo_request_admin_callback(callback: CallbackQuery, state: FSMContext
         if existing_sub:
             expires_at = existing_sub.get("expires_at")
             if isinstance(expires_at, datetime):
-                expires_str = expires_at.strftime("%d.%m.%Y %H:%M")
+                expires_str = fmt_date(expires_at)
             else:
                 expires_str = str(expires_at)
             await callback.message.edit_text(
@@ -5275,7 +5275,7 @@ async def admin_add_sub_choose_period(callback: CallbackQuery, state: FSMContext
         + user_line
         + f"VPN IP: <code>{client_ip}</code>\n"
         + f"Срок: <b>{period_label}</b>\n"
-        + f"Действует до: <b>{expires_at.strftime('%d.%m.%Y %H:%M')}</b>"
+        + f"Действует до: <b>{fmt_date(expires_at)}</b>"
     )
 
 
@@ -5942,9 +5942,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     continue
 
                 def _fmt_exp(dt):
-                    if dt and hasattr(dt, "strftime"):
-                        return dt.strftime("%d.%m.%Y")
-                    return "?"
+                    return fmt_date(dt, with_time=False) if dt else "?"
 
                 trial_lines = []
                 promo_lines = []
@@ -6110,11 +6108,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     continue
 
                 def _format_expires(exp) -> str:
-                    if exp is None:
-                        return "?"
-                    if hasattr(exp, "strftime"):
-                        return exp.strftime("%d.%m.%Y")
-                    return str(exp)[:10]
+                    return fmt_date(exp, with_time=False) if exp else "?"
 
                 def _days_until_expiry(exp) -> int:
                     """Оставшиеся полные дни до expires_at. 0 если уже истекло."""
