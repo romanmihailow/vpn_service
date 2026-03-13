@@ -27,7 +27,7 @@ from .bot import (
     send_subscription_expired_notification,
 )
 from . import wg
-from .format_admin import fmt_user_line, fmt_ref_display
+from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
 from .logger import get_logger, get_promo_logger
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
@@ -112,6 +112,7 @@ async def _send_admin_new_user_notification(
     bot: Bot,
     telegram_user_id: int,
     telegram_username: Optional[str],
+    expires_at: Optional[datetime] = None,
 ) -> None:
     """
     Уведомление админу о новом пользователе (при получении тестового доступа).
@@ -120,23 +121,25 @@ async def _send_admin_new_user_notification(
     if not admin_id:
         return
     user_line = fmt_user_line(telegram_username, telegram_user_id)
-    now = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
+    if expires_at is None:
+        sub = db.get_latest_subscription_for_telegram(telegram_user_id)
+        expires_at = sub.get("expires_at") if sub else datetime.now(timezone.utc) + timedelta(days=7)
+    expires_str = fmt_date(expires_at)
     ref_info = db.get_referrer_with_count(telegram_user_id)
     if ref_info:
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = ref_info.get("referrer_username")
         ref_display = fmt_ref_display(ref_name, ref_tg)
-        # Порядковый номер реферала (218, 219, 220), а не общий count (220, 220, 220)
         ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
         ref_line = f"Реферер: {ref_display} ({ref_count})"
     else:
         ref_line = "Реферер: —"
     text = (
         "🆕 <b>Новый пользователь</b>\n\n"
-        f"• {user_line}\n"
+        f"• Пользователь: {user_line}\n"
         "• Источник: Реферальный триал\n"
         f"• {ref_line}\n"
-        f"• Создано: {now}"
+        f"• До: {expires_str}"
     )
     ok = await safe_send_message(
         bot=bot,
@@ -163,24 +166,23 @@ async def _send_admin_promo_used_notification(
     if not admin_id:
         return
     user_line = fmt_user_line(telegram_username, telegram_user_id)
-    created_str = datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")
-    expires_str = expires_at.strftime("%d.%m.%Y %H:%M") if hasattr(expires_at, "strftime") else str(expires_at)[:16]
+    expires_str = fmt_date(expires_at)
     ref_info = db.get_referrer_with_count(telegram_user_id)
     if ref_info:
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = ref_info.get("referrer_username")
         ref_display = fmt_ref_display(ref_name, ref_tg)
         ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
-        ref_line = f"Реферер: {ref_display} ({ref_count}) | До: {expires_str}"
+        ref_line = f"Реферер: {ref_display} ({ref_count})"
     else:
-        ref_line = f"Реферер: — | До: {expires_str}"
+        ref_line = "Реферер: —"
     text = (
         "🎟 <b>Промокод использован</b>\n\n"
         f"• Пользователь: {user_line}\n"
         f"• Промокод: {promo_code}\n"
         f"• Дней: +{extra_days}\n"
         f"• {ref_line}\n"
-        f"• Создано: {created_str}"
+        f"• До: {expires_str}"
     )
     ok = await safe_send_message(
         bot=bot,
@@ -5965,14 +5967,14 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                             ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
                             ref_display = fmt_ref_display(ref_name, ref_tg)
                             trial_lines.append(
-                                f"• {user_line} | Реферер {ref_display} ({ref_count}) | До {expires_str}"
+                                f"• {user_line} | Реферер {ref_display} ({ref_count}) | До: {expires_str}"
                             )
                         else:
-                            trial_lines.append(f"• {user_line} | До {expires_str}")
+                            trial_lines.append(f"• {user_line} | До: {expires_str}")
                     elif event.startswith("promo"):
                         promo_info = db.get_promo_info_for_subscription(sub_id)
                         code = promo_info.get("code", "?") if promo_info else "?"
-                        promo_lines.append(f"• {user_line} | {code} | До {expires_str}")
+                        promo_lines.append(f"• {user_line} | {code} | До: {expires_str}")
                     else:
                         if event.startswith("yookassa"):
                             source = "ЮKassa"
@@ -5982,7 +5984,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                             source = "баллы"
                         else:
                             source = "оплата"
-                        paid_lines.append(f"• {user_line} | {source} | До {expires_str}")
+                        paid_lines.append(f"• {user_line} | {source} | До: {expires_str}")
 
                     to_notify.append((sub_id, tg_id, sub.get("expires_at")))
 

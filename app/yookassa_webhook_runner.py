@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
 from .bot import send_vpn_config_to_user, send_subscription_extended_notification, send_referral_reward_notification
-from .format_admin import fmt_user_line, fmt_ref_display
+from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
 from .config import settings
 
 from .logger import get_yookassa_logger
@@ -1073,9 +1073,9 @@ async def send_admin_payment_notification(
         f"{title}\n\n"
         f"• Пользователь: {user_line}\n"
         f"• Тариф: <b>{tariff_code}</b> | Сумма: <b>{amount} ₽</b>\n"
-        f"• Действует до: <b>{expires_at.strftime('%d.%m.%Y %H:%M')}</b>\n"
         f"• Реферер: {referrer_line}\n"
         f"• Оплат пользователя: ({user_payment_count})\n"
+        f"• До: <b>{fmt_date(expires_at)}</b>\n"
     )
 
     bot = Bot(

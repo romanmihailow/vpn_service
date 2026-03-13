@@ -23,3 +23,10 @@ def fmt_ref_display(ref_username: Optional[str], ref_telegram_id: int) -> str:
     if ref_username and (u := str(ref_username).strip()):
         return fmt_username_link(u)
     return f"<code>{ref_telegram_id}</code>"
+
+
+def fmt_date(dt) -> str:
+    """Единый формат даты для уведомлений: dd.mm.yyyy HH:MM"""
+    if hasattr(dt, "strftime"):
+        return dt.strftime("%d.%m.%Y %H:%M")
+    return str(dt)[:16]
