@@ -30,6 +30,8 @@ from .messages import (
     REF_LINK_WELCOME_TEXT,
     REF_TRIAL_BUTTON_TEXT,
     REF_TRIAL_CONFIG_CAPTION,
+    SUPPORT_BUTTON_TEXT,
+    SUPPORT_URL,
 )
 from . import wg
 from .format_admin import fmt_date, fmt_ref_display, fmt_user_line
@@ -6178,9 +6180,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                 def _make_2h_text(sub: dict) -> str:
                     return (
                         "Ты получил пробный доступ к MaxNet VPN.\n\n"
-                        "Подключение: открой файл vpn.conf из сообщения выше → «Поделиться» → WireGuard (iPhone) "
-                        "или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
-                        "Не получается? Пиши @MaxNet_Support, поможем."
+                        "Не подключался ещё? Нажми «📱 Получить настройки» — пришлю конфиг заново.\n\n"
+                        "Не получается подключиться? Нажми «🧑‍💻 Нужна помощь» — поможем."
                     )
 
                 def _make_24h_text(sub: dict) -> str:
@@ -6188,18 +6189,16 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     return (
                         f"Ты получил доступ к MaxNet VPN, но пока не подключался.\n\n"
                         f"Подписка действует до {_format_expires(exp)}.\n\n"
-                        f"Не нашёл конфиг? Нажми кнопку ниже.\n"
-                        f"Импорт: «Поделиться» → WireGuard (iPhone) или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
-                        f"Вопросы — @MaxNet_Support."
+                        f"Нажми «📱 Получить настройки» — пришлю конфиг заново.\n\n"
+                        f"Не получается? Нажми «🧑‍💻 Нужна помощь»."
                     )
 
                 def _make_5d_text(sub: dict) -> str:
                     days = _days_until_expiry(sub.get("expires_at"))
                     return (
                         f"Подписка MaxNet VPN истекает через {_days_text(days)}.\n\n"
-                        f"Ты ещё не подключался. Не нашёл конфиг? Нажми кнопку ниже.\n"
-                        f"Импорт: «Поделиться» → WireGuard (iPhone) или WireGuard → «+» → Импорт из файла или архива (Android).\n\n"
-                        f"Вопросы — @MaxNet_Support."
+                        f"Ты ещё не подключался. Нажми «📱 Получить настройки» — пришлю конфиг.\n\n"
+                        f"Не получается? Нажми «🧑‍💻 Нужна помощь»."
                     )
 
                 async def _fetch_handshakes():
@@ -6266,6 +6265,10 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                                     InlineKeyboardButton(
                                         text="📱 Получить настройки",
                                         callback_data=f"config:resend:{sub_id}",
+                                    ),
+                                    InlineKeyboardButton(
+                                        text=SUPPORT_BUTTON_TEXT,
+                                        url=SUPPORT_URL,
                                     ),
                                 ],
                             ]
