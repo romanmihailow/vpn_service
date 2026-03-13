@@ -203,10 +203,16 @@ def pluralize_points(n: int) -> str:
         return f"{n} баллов"
 
 
-def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str) -> None:
+def deactivate_existing_active_subscriptions(
+    telegram_user_id: int,
+    reason: str,
+    release_ips_to_pool: bool = True,
+) -> None:
     """
     Деактивирует ВСЕ активные подписки пользователя и удаляет их peer'ы из WireGuard.
     Используется перед выдачей нового доступа.
+    При release_ips_to_pool=False IP не возвращаются в пул (для reuse — новая подписка
+    того же пользователя переиспользует ключи и IP).
     """
     active_subs = db.get_active_subscriptions_for_telegram(telegram_user_id=telegram_user_id)
 
@@ -218,15 +224,17 @@ def deactivate_existing_active_subscriptions(telegram_user_id: int, reason: str)
             continue
 
         log.info(
-            "[AutoCleanup] Deactivate old sub_id=%s for tg_id=%s reason=%s",
+            "[AutoCleanup] Deactivate old sub_id=%s for tg_id=%s reason=%s release_ip=%s",
             sub_id,
             telegram_user_id,
             reason,
+            release_ips_to_pool,
         )
 
         db.deactivate_subscription_by_id(
             sub_id=sub_id,
             event_name=reason,
+            release_ip_to_pool=release_ips_to_pool,
         )
 
         if pub_key:
@@ -952,8 +960,7 @@ async def cmd_help(message: Message) -> None:
 SUPPORT_TEXT = (
     "Если что-то пошло не так с оплатой или подключением VPN,\n"
     "ты можешь написать в поддержку:\n\n"
-    "• @MaxNet_Support\n"
-    "• @rmw_ok\n\n"
+    "• @MaxNet_Support\n\n"
     "Опиши проблему, укажи свой @username и, по возможности, приложи скриншоты."
 )
 
@@ -2212,9 +2219,11 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
         if extend_existing and reuse_priv and reuse_pub and reuse_ip:
             # Есть последняя подписка с валидными ключами/IP —
             # "оживляем" её конфиг (даже если она была деактивирована).
+            # release_ips_to_pool=False — переиспользуем IP, не отдавать в пул.
             deactivate_existing_active_subscriptions(
                 telegram_user_id=telegram_user_id,
                 reason="auto_replace_points_payment",
+                release_ips_to_pool=False,
             )
 
             client_priv = reuse_priv
@@ -2241,6 +2250,7 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             deactivate_existing_active_subscriptions(
                 telegram_user_id=telegram_user_id,
                 reason="auto_replace_points_payment",
+                release_ips_to_pool=True,
             )
 
             client_priv, client_pub = wg.generate_keypair()
@@ -3287,9 +3297,11 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
             subscription_created = False
             try:
                 # На всякий случай выключим все активные подписки (если вдруг что-то есть)
+                # release_ips_to_pool=False при reuse — иначе race: отпустим IP, другой юзер его возьмёт.
                 deactivate_existing_active_subscriptions(
                     telegram_user_id=user.id,
                     reason="auto_replace_promo_new_sub",
+                    release_ips_to_pool=not (reuse_priv and reuse_pub and reuse_ip),
                 )
 
                 send_config = True
@@ -5883,7 +5895,7 @@ async def auto_revoke_unused_promo_points() -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
 
 
-NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 600  # 10 минут
+NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы уведомления о handshake приходили быстрее
 
 
 async def auto_new_handshake_admin_notification(bot: Bot) -> None:
@@ -5992,14 +6004,45 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     parts.extend(paid_lines)
 
                 text = "\n".join(parts)
+                text_len = len(text)
+                TELEGRAM_LIMIT = 4096
+                if text_len > TELEGRAM_LIMIT:
+                    log.warning(
+                        "[NewHandshakeAdmin] Message too long (%s > %s), splitting",
+                        text_len,
+                        TELEGRAM_LIMIT,
+                    )
+                    # Разбиваем по строкам, чтобы каждый chunk < 4096
+                    lines = text.split("\n")
+                    chunks = []
+                    buf = []
+                    buflen = 0
+                    for ln in lines:
+                        add = len(ln) + 1
+                        if buf and buflen + add > TELEGRAM_LIMIT:
+                            chunks.append("\n".join(buf))
+                            buf = []
+                            buflen = 0
+                        buf.append(ln)
+                        buflen += add
+                    if buf:
+                        chunks.append("\n".join(buf))
+                    texts = chunks
+                else:
+                    texts = [text]
 
-                ok = await safe_send_message(
-                    bot=bot,
-                    chat_id=admin_id,
-                    text=text,
-                    disable_web_page_preview=True,
-                )
-                if ok:
+                all_ok = True
+                for part in texts:
+                    ok = await safe_send_message(
+                        bot=bot,
+                        chat_id=admin_id,
+                        text=part,
+                        disable_web_page_preview=True,
+                    )
+                    if not ok:
+                        all_ok = False
+
+                if all_ok:
                     for sub_id, tg_id, exp in to_notify:
                         try:
                             db.create_subscription_notification(
@@ -6017,6 +6060,13 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     log.info(
                         "[NewHandshakeAdmin] Sent notification for %s subs",
                         len(to_notify),
+                    )
+                else:
+                    log.warning(
+                        "[NewHandshakeAdmin] send_message FAILED (batch=%s subs, len=%s). "
+                        "Check [SafeSend] logs for Telegram error.",
+                        len(to_notify),
+                        text_len,
                     )
 
             except Exception as e:

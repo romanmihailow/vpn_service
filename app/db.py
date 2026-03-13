@@ -544,10 +544,12 @@ def deactivate_subscriptions_for_period(
 def deactivate_subscription_by_id(
     sub_id: int,
     event_name: str,
+    release_ip_to_pool: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """
     Деактивирует одну подписку по id (если она ещё активна) и возвращает её данные.
-    Возвращает IP в пул для переиспользования.
+    По умолчанию возвращает IP в пул. При release_ip_to_pool=False IP не освобождается
+    (нужно при reuse — новая подписка того же пользователя использует этот IP).
     """
     select_sql = """
     SELECT *
@@ -576,15 +578,34 @@ def deactivate_subscription_by_id(
         conn.commit()
 
     vpn_ip = sub.get("vpn_ip")
-    if vpn_ip:
-        try:
-            release_ip_in_pool(str(vpn_ip))
-        except Exception as e:
-            log.error(
-                "[Deactivate] Failed to release IP %s for sub_id=%s: %r",
+    if vpn_ip and release_ip_to_pool:
+        # Не освобождать, если другая активная подписка использует этот IP (дубли)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM vpn_subscriptions
+                    WHERE vpn_ip = %s AND active = TRUE
+                    """,
+                    (str(vpn_ip),),
+                )
+                cnt = (cur.fetchone() or (0,))[0]
+        if cnt == 0:
+            try:
+                release_ip_in_pool(str(vpn_ip))
+            except Exception as e:
+                log.error(
+                    "[Deactivate] Failed to release IP %s for sub_id=%s: %r",
+                    vpn_ip,
+                    sub_id,
+                    e,
+                )
+        else:
+            log.info(
+                "[Deactivate] Skip release IP %s for sub_id=%s: %s other active sub(s) use it",
                 vpn_ip,
                 sub_id,
-                e,
+                cnt,
             )
 
     return sub
