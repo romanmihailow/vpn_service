@@ -5,7 +5,7 @@ from typing import Optional
 from datetime import datetime
 
 from aiogram import Bot
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup
 
 from .config import settings
 from .format_admin import fmt_date
@@ -13,6 +13,8 @@ from .messages import (
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
+    SUPPORT_BUTTON_TEXT,
+    SUPPORT_URL,
 )
 import qrcode
 
@@ -77,12 +79,18 @@ async def send_vpn_config_to_user(
         log.info("[SendConfig] QR photo sent to tg_id=%s", telegram_user_id)
         await asyncio.sleep(CONFIG_SEND_DELAY_SEC)
 
-        # 3. Короткая инструкция
+        # 3. Короткая инструкция + кнопка помощи (открывает чат поддержки)
+        support_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+            ]
+        )
         await bot.send_message(
             chat_id=telegram_user_id,
             text=CONNECTION_INSTRUCTION_SHORT,
             parse_mode=None,
             disable_web_page_preview=True,
+            reply_markup=support_keyboard,
         )
         log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
 
