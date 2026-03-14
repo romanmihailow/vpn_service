@@ -741,6 +741,12 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
         ],
         [
             InlineKeyboardButton(
+                text="🤝 Пригласить друга",
+                callback_data="ref:open_from_notify",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
                 text="🎟 Ввести промокод",
                 callback_data="promo:open",
             ),
