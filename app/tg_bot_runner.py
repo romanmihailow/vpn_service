@@ -1113,7 +1113,8 @@ ADMIN_INFO_TEXT = (
     "/broadcast_list — рассылка по списку ID из файла (один telegram_user_id на строку).\n"
     "/bonus_list — файл с ID: каждому +100 баллов и отправка сообщения.\n\n"
     "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes.\n\n"
-    "/admin_stats — диагностика IP-пула и активных подписок."
+    "/admin_stats — диагностика IP-пула и активных подписок.\n"
+    "/crm_report [дней] — CRM-отчёт по воронке (по умолчанию 7 дней)."
 )
 
 
@@ -2894,11 +2895,12 @@ async def ref_open_from_ref_callback(callback: CallbackQuery) -> None:
     await callback.answer("Скопируй или перешли это сообщение другу 🙂")
 
 
-@router.callback_query(F.data == "ref:open_from_notify")
+@router.callback_query(F.data.startswith("ref:open_from_notify"))
 async def ref_open_from_notify(callback: CallbackQuery) -> None:
     """
     Короткий вариант реферального сообщения по кнопке
     «🤝 Пригласить друга» под уведомлениями.
+    Поддерживает ref:open_from_notify и ref:open_from_notify:{sub_id} (для tracking).
     """
     user = callback.from_user
     if user is None:
@@ -2907,6 +2909,32 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 
     telegram_user_id = user.id
     username = user.username
+
+    # Tracking ref_nudge_clicked для CRM referral nudge (callback_data с sub_id)
+    data = callback.data or ""
+    if data.startswith("ref:open_from_notify:"):
+        parts = data.split(":", 2)
+        if len(parts) >= 3 and parts[2].isdigit():
+            try:
+                sub_id = int(parts[2])
+                sub = db.get_subscription_by_id(sub_id)
+                if sub and sub.get("telegram_user_id") == telegram_user_id:
+                    if not db.has_subscription_notification(sub_id, "ref_nudge_clicked"):
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type="ref_nudge_clicked",
+                                telegram_user_id=sub.get("telegram_user_id"),
+                                expires_at=sub.get("expires_at"),
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "[Referral] Failed to record ref_nudge_clicked sub_id=%s: %r",
+                                sub_id,
+                                e,
+                            )
+            except (ValueError, TypeError):
+                pass
 
     try:
         info = db.get_or_create_referral_info(
@@ -3725,6 +3753,63 @@ async def cmd_admin_stats(message: Message) -> None:
         return
 
     await send_admin_stats(message)
+
+
+@router.message(Command("crm_report"))
+async def cmd_crm_report(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    days = 7
+    parts = (message.text or "").strip().split()
+    if len(parts) >= 2:
+        try:
+            days = int(parts[1])
+            days = max(1, min(days, 90))
+        except ValueError:
+            pass
+
+    try:
+        report = db.get_crm_funnel_report(days=days)
+    except Exception as e:
+        log.error("[CrmReport] Failed to get report: %r", e)
+        await message.answer("Не удалось получить отчёт. См. логи.")
+        return
+
+    r = report
+    vpn_ok_pct = ""
+    if r["handshake_followup_10m"] > 0:
+        vpn_ok_pct = f" ({100 * r['vpn_ok_clicked'] // r['handshake_followup_10m']}%)"
+    ref_pct = ""
+    if r["handshake_referral_nudge_3d"] > 0:
+        ref_pct = f" ({100 * r['ref_nudge_clicked'] // r['handshake_referral_nudge_3d']}%)"
+
+    text = (
+        f"<b>CRM-отчёт за {days} дней</b>\n\n"
+        "<b>Handshake funnel:</b>\n"
+        f"• first handshake: {r['handshake_user_connected']}\n"
+        f"• 10m follow-up sent: {r['handshake_followup_10m']}\n"
+        f"• «Всё работает» clicked: {r['vpn_ok_clicked']}{vpn_ok_pct}\n"
+        f"• 2h follow-up sent: {r['handshake_followup_2h']}\n"
+        f"• 24h follow-up sent: {r['handshake_followup_24h']}\n"
+        f"• referral nudge 3d sent: {r['handshake_referral_nudge_3d']}\n"
+        f"• referral CTA clicked: {r['ref_nudge_clicked']}{ref_pct}\n\n"
+        "<b>No-handshake funnel:</b>\n"
+        f"• 2h reminder: {r['no_handshake_2h']}\n"
+        f"• 24h reminder: {r['no_handshake_24h']}\n"
+        f"• 5d reminder: {r['no_handshake_5d']}\n"
+        f"• survey sent: {r['no_handshake_survey']}\n\n"
+        "<b>Payments:</b>\n"
+        f"• first paid subscriptions: {r['welcome_after_first_payment']}\n"
+        f"• welcome sent: {r['welcome_after_first_payment']}\n"
+        f"• first paid with prior handshake: {r['first_paid_with_prior_handshake']}\n"
+    )
+
+    await message.answer(
+        text,
+        disable_web_page_preview=True,
+    )
 
 
 @router.message(Command("admin_cmd"))
@@ -6058,11 +6143,6 @@ HANDSHAKE_REFERRAL_NUDGE_3D_TEXT = (
     "Получить свою ссылку:\n/ref"
 )
 
-HANDSHAKE_REFERRAL_NUDGE_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
-    ]
-)
 
 NO_HANDSHAKE_SURVEY_TEXT = (
     "Подскажите, пожалуйста, почему не стали пользоваться VPN?\n\n"
@@ -6354,6 +6434,18 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
             ]
         )
 
+    def _make_ref_nudge_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🤝 Пригласить друга",
+                        callback_data=f"ref:open_from_notify:{sub_id}",
+                    ),
+                ],
+            ]
+        )
+
     try:
         FOLLOWUPS = [
             ("handshake_followup_10m", HANDSHAKE_FOLLOWUP_10M_TEXT, True),
@@ -6374,7 +6466,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                         if has_buttons:
                             kwargs["reply_markup"] = _make_10m_keyboard(sub_id)
                         elif followup_type == "handshake_referral_nudge_3d":
-                            kwargs["reply_markup"] = HANDSHAKE_REFERRAL_NUDGE_KEYBOARD
+                            kwargs["reply_markup"] = _make_ref_nudge_keyboard(sub_id)
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=tg_id,

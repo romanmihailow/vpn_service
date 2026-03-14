@@ -1214,6 +1214,86 @@ def get_admin_stats() -> Dict[str, int]:
     return result
 
 
+def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
+    """
+    Агрегированный CRM-отчёт по воронке за заданный период.
+    Использует subscription_notifications, COUNT(DISTINCT subscription_id).
+    """
+    types = [
+        "handshake_user_connected",
+        "handshake_followup_10m",
+        "vpn_ok_clicked",
+        "handshake_followup_2h",
+        "handshake_followup_24h",
+        "handshake_referral_nudge_3d",
+        "ref_nudge_clicked",
+        "no_handshake_2h",
+        "no_handshake_24h",
+        "no_handshake_5d",
+        "no_handshake_survey",
+        "welcome_after_first_payment",
+    ]
+    result: Dict[str, Any] = {t: 0 for t in types}
+    result["first_paid_with_prior_handshake"] = 0
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'handshake_user_connected') AS handshake_user_connected,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'handshake_followup_10m') AS handshake_followup_10m,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'vpn_ok_clicked') AS vpn_ok_clicked,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'handshake_followup_2h') AS handshake_followup_2h,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'handshake_followup_24h') AS handshake_followup_24h,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'handshake_referral_nudge_3d') AS handshake_referral_nudge_3d,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'ref_nudge_clicked') AS ref_nudge_clicked,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_2h') AS no_handshake_2h,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_24h') AS no_handshake_24h,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_5d') AS no_handshake_5d,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey') AS no_handshake_survey,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'welcome_after_first_payment') AS welcome_after_first_payment
+                FROM subscription_notifications
+                WHERE sent_at >= NOW() - (%s::text || ' days')::interval
+                  AND notification_type = ANY(%s);
+                """,
+                (days, types),
+            )
+            row = cur.fetchone()
+            if row:
+                result["handshake_user_connected"] = int(row[0] or 0)
+                result["handshake_followup_10m"] = int(row[1] or 0)
+                result["vpn_ok_clicked"] = int(row[2] or 0)
+                result["handshake_followup_2h"] = int(row[3] or 0)
+                result["handshake_followup_24h"] = int(row[4] or 0)
+                result["handshake_referral_nudge_3d"] = int(row[5] or 0)
+                result["ref_nudge_clicked"] = int(row[6] or 0)
+                result["no_handshake_2h"] = int(row[7] or 0)
+                result["no_handshake_24h"] = int(row[8] or 0)
+                result["no_handshake_5d"] = int(row[9] or 0)
+                result["no_handshake_survey"] = int(row[10] or 0)
+                result["welcome_after_first_payment"] = int(row[11] or 0)
+
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT n.subscription_id)
+                FROM subscription_notifications n
+                WHERE n.notification_type = 'welcome_after_first_payment'
+                  AND n.sent_at >= NOW() - (%s::text || ' days')::interval
+                  AND EXISTS (
+                    SELECT 1 FROM subscription_notifications h
+                    WHERE h.subscription_id = n.subscription_id
+                      AND h.notification_type = 'handshake_user_connected'
+                  );
+                """,
+                (days,),
+            )
+            row = cur.fetchone()
+            if row:
+                result["first_paid_with_prior_handshake"] = int(row[0] or 0)
+
+    return result
+
 
 def get_latest_subscription_for_telegram(
     telegram_user_id: int,
@@ -1636,6 +1716,35 @@ def has_subscription_notification(
             return row is not None
 
 
+def get_subscriptions_for_welcome_after_first_payment() -> List[Dict[str, Any]]:
+    """
+    Подписки с оплатой через ЮKassa или Heleket (без баллов),
+    которым ещё не отправляли welcome_after_first_payment.
+    """
+    sql = """
+    SELECT s.id AS subscription_id, s.telegram_user_id, s.expires_at
+    FROM vpn_subscriptions s
+    WHERE s.active = TRUE
+      AND s.expires_at > NOW()
+      AND s.telegram_user_id IS NOT NULL
+      AND (
+        s.last_event_name LIKE 'yookassa_payment_succeeded_%%'
+        OR s.last_event_name LIKE 'heleket_payment_paid_%%'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n
+        WHERE n.subscription_id = s.id
+          AND n.notification_type = 'welcome_after_first_payment'
+      )
+    ORDER BY s.id ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 def get_subscriptions_expiring_in_window(
     from_hours: int,
     to_hours: int,
@@ -1669,7 +1778,8 @@ def get_subscriptions_for_no_handshake_reminder(
     """
     Возвращает активные подписки для напоминания «ты ещё не подключался».
     Только триал и промо (referral_free_trial_7d, promo*), платным не шлём.
-    reminder_type: 'no_handshake_2h' (>= 2h), 'no_handshake_24h' (>= 24h), 'no_handshake_5d' (>= 5 дней).
+    reminder_type: 'no_handshake_2h' (>= 2h), 'no_handshake_24h' (>= 24h), 'no_handshake_5d' (>= 5 дней),
+    'no_handshake_survey' (>= 6 дней).
     """
     if reminder_type == "no_handshake_2h":
         hours = 2
@@ -1677,6 +1787,8 @@ def get_subscriptions_for_no_handshake_reminder(
         hours = 24
     elif reminder_type == "no_handshake_5d":
         hours = 5 * 24
+    elif reminder_type == "no_handshake_survey":
+        hours = 6 * 24
     else:
         return []
 
@@ -1737,8 +1849,9 @@ def get_handshake_followup_candidates(
 ) -> List[Dict[str, Any]]:
     """
     Подписки, которым пора отправить follow-up после handshake_user_connected.
-    followup_type: 'handshake_followup_10m', 'handshake_followup_2h' или 'handshake_followup_24h'.
-    Для 2h и 24h — только триал и промо (не платные).
+    followup_type: 'handshake_followup_10m', 'handshake_followup_2h', 'handshake_followup_24h',
+    'handshake_referral_nudge_3d'.
+    Для 2h, 24h и referral_nudge_3d — только триал и промо (не платные).
     """
     trial_only = """
       AND (
@@ -1752,6 +1865,8 @@ def get_handshake_followup_candidates(
         interval = "2 hours"
     elif followup_type == "handshake_followup_24h":
         interval = "24 hours"
+    elif followup_type == "handshake_referral_nudge_3d":
+        interval = "3 days"
     else:
         return []
 
