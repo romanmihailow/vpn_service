@@ -2823,6 +2823,7 @@ async def vpn_ok_callback(callback: CallbackQuery) -> None:
     buy_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="pay:open")],
+            [InlineKeyboardButton(text="🤝 Получить ссылку", callback_data="ref:open_from_notify")],
         ]
     )
     await callback.message.answer(
@@ -3806,23 +3807,23 @@ async def cmd_crm_report(message: Message) -> None:
 
     text = (
         f"<b>CRM-отчёт за {days} дней</b>\n\n"
-        "<b>Handshake funnel:</b>\n"
-        f"• first handshake: {r['handshake_user_connected']}\n"
-        f"• 10m follow-up sent: {r['handshake_followup_10m']}\n"
-        f"• «Всё работает» clicked: {r['vpn_ok_clicked']}{vpn_ok_pct}\n"
-        f"• 2h follow-up sent: {r['handshake_followup_2h']}\n"
-        f"• 24h follow-up sent: {r['handshake_followup_24h']}\n"
-        f"• referral nudge 3d sent: {r['handshake_referral_nudge_3d']}\n"
-        f"• referral CTA clicked: {r['ref_nudge_clicked']}{ref_pct}\n\n"
-        "<b>No-handshake funnel:</b>\n"
-        f"• 2h reminder: {r['no_handshake_2h']}\n"
-        f"• 24h reminder: {r['no_handshake_24h']}\n"
-        f"• 5d reminder: {r['no_handshake_5d']}\n"
-        f"• survey sent: {r['no_handshake_survey']}\n\n"
-        "<b>Payments:</b>\n"
-        f"• first paid subscriptions: {r['welcome_after_first_payment']}\n"
-        f"• welcome sent: {r['welcome_after_first_payment']}\n"
-        f"• first paid with prior handshake: {r['first_paid_with_prior_handshake']}\n"
+        "<b>Воронка подключений:</b>\n"
+        f"• первый handshake: {r['handshake_user_connected']}\n"
+        f"• follow-up через 10 минут: {r['handshake_followup_10m']}\n"
+        f"• «Всё работает» нажали: {r['vpn_ok_clicked']}{vpn_ok_pct}\n"
+        f"• follow-up через 2 часа: {r['handshake_followup_2h']}\n"
+        f"• follow-up через 24 часа: {r['handshake_followup_24h']}\n"
+        f"• referral follow-up через 3 дня: {r['handshake_referral_nudge_3d']}\n"
+        f"• «Пригласить друга» нажали: {r['ref_nudge_clicked']}{ref_pct}\n\n"
+        "<b>Воронка без handshake:</b>\n"
+        f"• напоминание через 2 часа: {r['no_handshake_2h']}\n"
+        f"• напоминание через 24 часа: {r['no_handshake_24h']}\n"
+        f"• напоминание через 5 дней: {r['no_handshake_5d']}\n"
+        f"• опрос причины отказа: {r['no_handshake_survey']}\n\n"
+        "<b>Оплаты:</b>\n"
+        f"• первые платные подписки: {r['welcome_after_first_payment']}\n"
+        f"• welcome после оплаты: {r['welcome_after_first_payment']}\n"
+        f"• первые оплаты после handshake: {r['first_paid_with_prior_handshake']}\n"
     )
 
     await message.answer(
@@ -6135,7 +6136,9 @@ VPN_OK_ANSWER_TEXT = (
     "чтобы он не отключился после теста.\n\n"
     "Самый популярный тариф:\n"
     "• 3 месяца — 270 ₽\n\n"
-    "Оформить можно здесь:\n/buy"
+    "Оформить можно здесь:\n/buy\n\n"
+    "Кстати, вы можете приглашать друзей и получать баллы. "
+    "Баллы можно тратить на оплату VPN."
 )
 
 SUPPORT_URL = "https://t.me/maxnet_vpn_support"
