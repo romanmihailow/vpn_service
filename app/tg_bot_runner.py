@@ -777,6 +777,13 @@ REF_TRIAL_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+POINTS_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🎮 Оплатить баллами", callback_data="points:open")],
+        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
+    ]
+)
+
 
 def get_start_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
     """Клавиатура для /start. Добавляет кнопку триала, если пользователь может его получить."""
@@ -3203,6 +3210,7 @@ async def cmd_points(message: Message) -> None:
         await message.answer(
             text,
             disable_web_page_preview=True,
+            reply_markup=POINTS_KEYBOARD,
         )
         return
 
@@ -3297,6 +3305,7 @@ async def cmd_points(message: Message) -> None:
     await message.answer(
         text,
         disable_web_page_preview=True,
+        reply_markup=POINTS_KEYBOARD,
     )
 
 
@@ -6147,6 +6156,13 @@ HANDSHAKE_REFERRAL_NUDGE_3D_TEXT = (
     "Получить свою ссылку:\n/ref"
 )
 
+HANDSHAKE_FOLLOWUP_2H_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🛒 Закрепить доступ", callback_data="pay:open")],
+        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
+        [InlineKeyboardButton(text="🙋 Нужна помощь", url=SUPPORT_URL)],
+    ]
+)
 
 NO_HANDSHAKE_SURVEY_TEXT = (
     "Подскажите, пожалуйста, почему не стали пользоваться VPN?\n\n"
@@ -6469,6 +6485,8 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                         kwargs = {"disable_web_page_preview": True}
                         if has_buttons:
                             kwargs["reply_markup"] = _make_10m_keyboard(sub_id)
+                        elif followup_type == "handshake_followup_2h":
+                            kwargs["reply_markup"] = HANDSHAKE_FOLLOWUP_2H_KEYBOARD
                         elif followup_type == "handshake_referral_nudge_3d":
                             kwargs["reply_markup"] = _make_ref_nudge_keyboard(sub_id)
                         ok = await safe_send_message(
