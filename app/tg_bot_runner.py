@@ -2780,6 +2780,53 @@ async def ref_trial_claim_callback(callback: CallbackQuery) -> None:
         )
 
 
+@router.callback_query(F.data.startswith("vpn_ok:"))
+async def vpn_ok_callback(callback: CallbackQuery) -> None:
+    """
+    Кнопка «Всё работает» в handshake_followup_10m.
+    Отвечаем, убираем кнопки, записываем vpn_ok_clicked.
+    """
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+
+    if db.has_subscription_notification(sub_id, "vpn_ok_clicked"):
+        await callback.answer("Уже учтено 👍", show_alert=False)
+        return
+
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or sub.get("telegram_user_id") != (callback.from_user.id if callback.from_user else None):
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+
+    await callback.answer()
+    buy_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="pay:open")],
+        ]
+    )
+    await callback.message.answer(
+        VPN_OK_ANSWER_TEXT,
+        disable_web_page_preview=True,
+        reply_markup=buy_kb,
+    )
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    try:
+        db.create_subscription_notification(
+            subscription_id=sub_id,
+            notification_type="vpn_ok_clicked",
+            telegram_user_id=sub.get("telegram_user_id"),
+            expires_at=sub.get("expires_at"),
+        )
+    except Exception as e:
+        log.warning("[VpnOk] Failed to record vpn_ok_clicked sub_id=%s: %r", sub_id, e)
+
+
 @router.callback_query(F.data == "ref:open_from_ref")
 async def ref_open_from_ref_callback(callback: CallbackQuery) -> None:
     """
@@ -5941,6 +5988,54 @@ async def auto_revoke_unused_promo_points() -> None:
 
 NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы уведомления о handshake приходили быстрее
 
+HANDSHAKE_USER_CONNECTED_TEXT = (
+    "VPN подключён 👍\n\n"
+    "Если соединение работает стабильно, можно закрепить доступ, "
+    "чтобы он не отключился после теста.\n\n"
+    "Самый популярный тариф:\n"
+    "• 3 месяца — 270 ₽\n\n"
+    "Это на 30% дешевле помесячной оплаты.\n\n"
+    "Оформить можно здесь:\n/buy"
+)
+
+HANDSHAKE_FOLLOWUP_10M_TEXT = (
+    "VPN подключён 👍\n\n"
+    "Всё открывается нормально?\n\n"
+    "Если что-то не работает или нужна помощь с настройкой — "
+    "просто напишите сюда, поможем."
+)
+
+HANDSHAKE_FOLLOWUP_2H_TEXT = (
+    "Если VPN работает стабильно, можно заранее закрепить доступ, "
+    "чтобы он не отключился после тестового периода.\n\n"
+    "Самый популярный тариф:\n"
+    "• 3 месяца — 270 ₽\n\n"
+    "Оформить можно здесь:\n/buy"
+)
+
+HANDSHAKE_FOLLOWUP_24H_TEXT = (
+    "Если VPN оказался полезным, можно закрепить доступ, "
+    "чтобы он не отключился после тестового периода.\n\n"
+    "Самый популярный тариф:\n"
+    "• 3 месяца — 270 ₽\n\n"
+    "Это дешевле помесячной оплаты.\n\n"
+    "Оформить можно здесь:\n/buy"
+)
+
+VPN_OK_ANSWER_TEXT = (
+    "Отлично 👍\n\n"
+    "Рады, что всё работает.\n\n"
+    "Если VPN будет нужен на постоянной основе, можно закрепить доступ заранее, "
+    "чтобы он не отключился после теста.\n\n"
+    "Самый популярный тариф:\n"
+    "• 3 месяца — 270 ₽\n\n"
+    "Оформить можно здесь:\n/buy"
+)
+
+SUPPORT_URL = "https://t.me/maxnet_vpn_support"
+
+HANDSHAKE_FOLLOWUP_INTERVAL_SEC = 120
+
 
 async def auto_new_handshake_admin_notification(bot: Bot) -> None:
     """
@@ -5999,6 +6094,30 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     user_line = fmt_user_line(username, tg_id)
                     expires_str = _fmt_exp(sub.get("expires_at"))
                     event = sub.get("last_event_name") or ""
+
+                    # Уведомление пользователю при первом handshake
+                    if tg_id and not db.has_subscription_notification(sub_id, "handshake_user_connected"):
+                        ok = await safe_send_message(
+                            bot=bot,
+                            chat_id=tg_id,
+                            text=HANDSHAKE_USER_CONNECTED_TEXT,
+                            disable_web_page_preview=True,
+                        )
+                        if ok:
+                            try:
+                                db.create_subscription_notification(
+                                    subscription_id=sub_id,
+                                    notification_type="handshake_user_connected",
+                                    telegram_user_id=tg_id,
+                                    expires_at=sub.get("expires_at"),
+                                )
+                            except Exception as e:
+                                log.warning(
+                                    "[HandshakeUser] Failed to record notification sub_id=%s: %r",
+                                    sub_id,
+                                    e,
+                                )
+                        await asyncio.sleep(1)
 
                     if event == "referral_free_trial_7d":
                         ref_info = db.get_referrer_with_count(tg_id)
@@ -6118,6 +6237,78 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
 
     finally:
         db.release_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN)
+
+
+async def auto_handshake_followup_notifications(bot: Bot) -> None:
+    """
+    Follow-up уведомления пользователю после первого handshake:
+    - через 10 мин: handshake_followup_10m
+    - через 2 часа: handshake_followup_2h (только триал/промо)
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP):
+        log.info("[HandshakeFollowup] Job already running in another instance")
+        return
+
+    def _make_10m_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="Всё работает", callback_data=f"vpn_ok:{sub_id}"),
+                ],
+                [
+                    InlineKeyboardButton(text="Нужна помощь", url=SUPPORT_URL),
+                ],
+            ]
+        )
+
+    try:
+        FOLLOWUPS = [
+            ("handshake_followup_10m", HANDSHAKE_FOLLOWUP_10M_TEXT, True),
+            ("handshake_followup_2h", HANDSHAKE_FOLLOWUP_2H_TEXT, False),
+            ("handshake_followup_24h", HANDSHAKE_FOLLOWUP_24H_TEXT, False),
+        ]
+        while True:
+            try:
+                for followup_type, text, has_buttons in FOLLOWUPS:
+                    candidates = db.get_handshake_followup_candidates(followup_type)
+                    for row in candidates:
+                        sub_id = row.get("subscription_id")
+                        tg_id = row.get("telegram_user_id")
+                        if not tg_id:
+                            continue
+                        kwargs = {"disable_web_page_preview": True}
+                        if has_buttons:
+                            kwargs["reply_markup"] = _make_10m_keyboard(sub_id)
+                        ok = await safe_send_message(
+                            bot=bot,
+                            chat_id=tg_id,
+                            text=text,
+                            **kwargs,
+                        )
+                        if ok:
+                            try:
+                                db.create_subscription_notification(
+                                    subscription_id=sub_id,
+                                    notification_type=followup_type,
+                                    telegram_user_id=tg_id,
+                                    expires_at=row.get("expires_at"),
+                                )
+                            except Exception as e:
+                                log.warning(
+                                    "[HandshakeFollowup] Failed to record %s sub_id=%s: %r",
+                                    followup_type,
+                                    sub_id,
+                                    e,
+                                )
+                        await asyncio.sleep(1)
+
+            except Exception as e:
+                log.error("[HandshakeFollowup] Unexpected error: %r", e)
+
+            await asyncio.sleep(HANDSHAKE_FOLLOWUP_INTERVAL_SEC)
+
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP)
 
 
 async def auto_no_handshake_reminder(bot: Bot) -> None:
@@ -6351,6 +6542,7 @@ async def main() -> None:
     asyncio.create_task(auto_notify_expiring_subscriptions(bot))
     asyncio.create_task(auto_revoke_unused_promo_points())
     asyncio.create_task(auto_new_handshake_admin_notification(bot))
+    asyncio.create_task(auto_handshake_followup_notifications(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
 
     app = create_app()

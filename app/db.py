@@ -1732,6 +1732,53 @@ def get_subscriptions_for_new_handshake_admin() -> List[Dict[str, Any]]:
             return [dict(r) for r in rows]
 
 
+def get_handshake_followup_candidates(
+    followup_type: str,
+) -> List[Dict[str, Any]]:
+    """
+    Подписки, которым пора отправить follow-up после handshake_user_connected.
+    followup_type: 'handshake_followup_10m', 'handshake_followup_2h' или 'handshake_followup_24h'.
+    Для 2h и 24h — только триал и промо (не платные).
+    """
+    trial_only = """
+      AND (
+        s.last_event_name = 'referral_free_trial_7d'
+        OR s.last_event_name LIKE 'promo%%'
+      )"""
+    if followup_type == "handshake_followup_10m":
+        interval = "10 minutes"
+        trial_only = ""
+    elif followup_type == "handshake_followup_2h":
+        interval = "2 hours"
+    elif followup_type == "handshake_followup_24h":
+        interval = "24 hours"
+    else:
+        return []
+
+    sql = f"""
+    SELECT n.subscription_id, n.telegram_user_id, n.expires_at
+    FROM subscription_notifications n
+    JOIN vpn_subscriptions s ON s.id = n.subscription_id
+    WHERE n.notification_type = 'handshake_user_connected'
+      AND n.telegram_user_id IS NOT NULL
+      AND n.sent_at <= NOW() - INTERVAL '{interval}'
+      AND s.active = TRUE
+      AND s.expires_at > NOW()
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n2
+        WHERE n2.subscription_id = n.subscription_id
+          AND n2.notification_type = %s
+      )
+      {trial_only}
+    ORDER BY n.sent_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (followup_type,))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 def is_user_first_subscription(telegram_user_id: int) -> bool:
     """
     True если у пользователя ровно одна подписка (первый раз в сервисе).
