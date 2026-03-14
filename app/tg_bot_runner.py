@@ -732,6 +732,8 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
                 text="🛒 Купить подписку",
                 callback_data="pay:open",
             ),
+        ],
+        [
             InlineKeyboardButton(
                 text="🎮 Оплатить баллами",
                 callback_data="points:open",
@@ -742,6 +744,8 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
                 text="🎟 Ввести промокод",
                 callback_data="promo:open",
             ),
+        ],
+        [
             InlineKeyboardButton(
                 text="🌐 Открыть сайт",
                 url="https://maxnetvpn.ru",
