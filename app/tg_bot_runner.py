@@ -6006,10 +6006,12 @@ HANDSHAKE_FOLLOWUP_10M_TEXT = (
 )
 
 HANDSHAKE_FOLLOWUP_2H_TEXT = (
-    "Если VPN работает стабильно, можно заранее закрепить доступ, "
-    "чтобы он не отключился после тестового периода.\n\n"
-    "Самый популярный тариф:\n"
+    "Если VPN работает стабильно 👍\n\n"
+    "Можно закрепить доступ заранее, чтобы он не отключился\n"
+    "после тестового периода.\n\n"
+    "Самый популярный тариф:\n\n"
     "• 3 месяца — 270 ₽\n\n"
+    "Это дешевле, чем оплачивать помесячно.\n\n"
     "Оформить можно здесь:\n/buy"
 )
 
@@ -6035,6 +6037,43 @@ VPN_OK_ANSWER_TEXT = (
 SUPPORT_URL = "https://t.me/maxnet_vpn_support"
 
 HANDSHAKE_FOLLOWUP_INTERVAL_SEC = 120
+
+WELCOME_AFTER_FIRST_PAYMENT_TEXT = (
+    "Спасибо за подключение к MaxNet VPN 🙌\n\n"
+    "Если будут вопросы или что-то перестанет открываться — "
+    "пишите в поддержку:\n"
+    "@maxnet_vpn_support\n\n"
+    "VPN можно использовать и на других устройствах — "
+    "телефоне, ноутбуке и т.д.\n\n"
+    "Кстати, у MaxNet есть реферальная программа. "
+    "Можно приглашать друзей и получать бонусы для продления VPN.\n\n"
+    "Получить свою ссылку:\n/ref"
+)
+
+HANDSHAKE_REFERRAL_NUDGE_3D_TEXT = (
+    "Если VPN вам понравился 👍\n\n"
+    "Можно пригласить друзей и получать бонусы\n"
+    "за каждого пользователя.\n\n"
+    "Бонусами можно продлевать VPN бесплатно.\n\n"
+    "Получить свою ссылку:\n/ref"
+)
+
+HANDSHAKE_REFERRAL_NUDGE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
+    ]
+)
+
+NO_HANDSHAKE_SURVEY_TEXT = (
+    "Подскажите, пожалуйста, почему не стали пользоваться VPN?\n\n"
+    "1️⃣ Не разобрался с настройкой\n"
+    "2️⃣ Пока не нужен\n"
+    "3️⃣ Пользуюсь другим VPN\n"
+    "4️⃣ Дорого\n\n"
+    "Если ответите цифрой, это поможет нам улучшить сервис."
+)
+
+WELCOME_AFTER_FIRST_PAYMENT_INTERVAL_SEC = 600
 
 
 async def auto_new_handshake_admin_notification(bot: Bot) -> None:
@@ -6239,6 +6278,60 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN)
 
 
+async def auto_welcome_after_first_payment(bot: Bot) -> None:
+    """
+    Отправляет welcome-сообщение после первой оплаты (ЮKassa/Heleket).
+    Без баллов. Запись notification только после успешной отправки.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT):
+        log.info("[WelcomeFirstPayment] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                candidates = db.get_subscriptions_for_welcome_after_first_payment()
+                for row in candidates:
+                    sub_id = row.get("subscription_id")
+                    tg_id = row.get("telegram_user_id")
+                    if not tg_id:
+                        continue
+                    ok = await safe_send_message(
+                        bot=bot,
+                        chat_id=tg_id,
+                        text=WELCOME_AFTER_FIRST_PAYMENT_TEXT,
+                        disable_web_page_preview=True,
+                    )
+                    if ok:
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type="welcome_after_first_payment",
+                                telegram_user_id=tg_id,
+                                expires_at=row.get("expires_at"),
+                            )
+                            log.info(
+                                "[WelcomeFirstPayment] Sent to tg_id=%s sub_id=%s",
+                                tg_id,
+                                sub_id,
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "[WelcomeFirstPayment] Failed to record sub_id=%s: %r",
+                                sub_id,
+                                e,
+                            )
+                    await asyncio.sleep(1)
+
+            except Exception as e:
+                log.error("[WelcomeFirstPayment] Unexpected error: %r", e)
+
+            await asyncio.sleep(WELCOME_AFTER_FIRST_PAYMENT_INTERVAL_SEC)
+
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT)
+
+
 async def auto_handshake_followup_notifications(bot: Bot) -> None:
     """
     Follow-up уведомления пользователю после первого handshake:
@@ -6266,6 +6359,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
             ("handshake_followup_10m", HANDSHAKE_FOLLOWUP_10M_TEXT, True),
             ("handshake_followup_2h", HANDSHAKE_FOLLOWUP_2H_TEXT, False),
             ("handshake_followup_24h", HANDSHAKE_FOLLOWUP_24H_TEXT, False),
+            ("handshake_referral_nudge_3d", HANDSHAKE_REFERRAL_NUDGE_3D_TEXT, False),
         ]
         while True:
             try:
@@ -6279,6 +6373,8 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                         kwargs = {"disable_web_page_preview": True}
                         if has_buttons:
                             kwargs["reply_markup"] = _make_10m_keyboard(sub_id)
+                        elif followup_type == "handshake_referral_nudge_3d":
+                            kwargs["reply_markup"] = HANDSHAKE_REFERRAL_NUDGE_KEYBOARD
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=tg_id,
@@ -6392,6 +6488,9 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                         f"Не получается? Нажми «🧑‍💻 Нужна помощь»."
                     )
 
+                def _make_survey_text(sub: dict) -> str:
+                    return NO_HANDSHAKE_SURVEY_TEXT
+
                 async def _fetch_handshakes():
                     if hasattr(asyncio, "to_thread"):
                         return await asyncio.to_thread(wg.get_handshake_timestamps)
@@ -6399,12 +6498,13 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     return await loop.run_in_executor(None, wg.get_handshake_timestamps)
 
                 BATCHES = [
-                    ("no_handshake_2h", _make_2h_text),
-                    ("no_handshake_24h", _make_24h_text),
-                    ("no_handshake_5d", _make_5d_text),
+                    ("no_handshake_2h", _make_2h_text, True),
+                    ("no_handshake_24h", _make_24h_text, True),
+                    ("no_handshake_5d", _make_5d_text, True),
+                    ("no_handshake_survey", _make_survey_text, False),
                 ]
 
-                for batch_idx, (reminder_type, make_text) in enumerate(BATCHES):
+                for batch_idx, (reminder_type, make_text, use_keyboard) in enumerate(BATCHES):
                     if batch_idx > 0:
                         await asyncio.sleep(NO_HANDSHAKE_PAUSE_BETWEEN_TYPES)
                     handshakes = await _fetch_handshakes()
@@ -6432,47 +6532,66 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                         if not sub_id or not telegram_user_id:
                             continue
 
-                        # Сначала записываем — идемпотентность: при сбое отправки не будет дубля
-                        try:
-                            db.create_subscription_notification(
-                                subscription_id=sub_id,
-                                notification_type=reminder_type,
-                                telegram_user_id=telegram_user_id,
-                                expires_at=sub.get("expires_at"),
-                            )
-                        except Exception as db_err:
-                            log.error(
-                                "[NoHandshakeRemind] Failed to save notification sub_id=%s: %r",
-                                sub_id,
-                                db_err,
-                            )
-                            stats_db_error += 1
-                            continue
+                        # Для survey — запись только после успешной отправки; для остальных — до (идемпотентность)
+                        if reminder_type != "no_handshake_survey":
+                            try:
+                                db.create_subscription_notification(
+                                    subscription_id=sub_id,
+                                    notification_type=reminder_type,
+                                    telegram_user_id=telegram_user_id,
+                                    expires_at=sub.get("expires_at"),
+                                )
+                            except Exception as db_err:
+                                log.error(
+                                    "[NoHandshakeRemind] Failed to save notification sub_id=%s: %r",
+                                    sub_id,
+                                    db_err,
+                                )
+                                stats_db_error += 1
+                                continue
 
                         text = make_text(sub)
-                        keyboard = InlineKeyboardMarkup(
-                            inline_keyboard=[
-                                [
-                                    InlineKeyboardButton(
-                                        text="📱 Получить настройки",
-                                        callback_data=f"config:resend:{sub_id}",
-                                    ),
-                                    InlineKeyboardButton(
-                                        text=SUPPORT_BUTTON_TEXT,
-                                        url=SUPPORT_URL,
-                                    ),
-                                ],
-                            ]
-                        )
+                        if use_keyboard:
+                            keyboard = InlineKeyboardMarkup(
+                                inline_keyboard=[
+                                    [
+                                        InlineKeyboardButton(
+                                            text="📱 Получить настройки",
+                                            callback_data=f"config:resend:{sub_id}",
+                                        ),
+                                        InlineKeyboardButton(
+                                            text=SUPPORT_BUTTON_TEXT,
+                                            url=SUPPORT_URL,
+                                        ),
+                                    ],
+                                ]
+                            )
+                            reply_markup = keyboard
+                        else:
+                            reply_markup = None
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=telegram_user_id,
                             text=text,
                             disable_web_page_preview=True,
-                            reply_markup=keyboard,
+                            reply_markup=reply_markup,
                         )
                         if ok:
                             stats_sent += 1
+                            if reminder_type == "no_handshake_survey":
+                                try:
+                                    db.create_subscription_notification(
+                                        subscription_id=sub_id,
+                                        notification_type=reminder_type,
+                                        telegram_user_id=telegram_user_id,
+                                        expires_at=sub.get("expires_at"),
+                                    )
+                                except Exception as db_err:
+                                    log.warning(
+                                        "[NoHandshakeRemind] Failed to record survey sub_id=%s: %r",
+                                        sub_id,
+                                        db_err,
+                                    )
                             log.info(
                                 "[NoHandshakeRemind] Sent %s sub_id=%s tg_id=%s",
                                 reminder_type,
@@ -6543,6 +6662,7 @@ async def main() -> None:
     asyncio.create_task(auto_revoke_unused_promo_points())
     asyncio.create_task(auto_new_handshake_admin_notification(bot))
     asyncio.create_task(auto_handshake_followup_notifications(bot))
+    asyncio.create_task(auto_welcome_after_first_payment(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
 
     app = create_app()
