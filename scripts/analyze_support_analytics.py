@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 One-off script to analyze support_conversations and support_ai.log.
-Output: JSON and text stats for AI_SUPPORT_ANALYTICS_REPORT.md.
+Output: JSON and text stats for docs/ai-support/AI_SUPPORT_ANALYTICS_REPORT.md.
 Do not modify app code.
 """
 import os
