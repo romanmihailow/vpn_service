@@ -1,0 +1,97 @@
+# Documentation structure refactor
+
+Перенос документации из корня проекта в каталог `docs/` для уменьшения загромождения корня. Код, конфиги и рантайм не менялись.
+
+---
+
+## Что перенесено
+
+### 1. AI-support → docs/ai-support/
+
+Из корня в `docs/ai-support/` перенесены:
+
+- AI_SUPPORT_ARCHITECTURE_REVIEW.md
+- AI_SUPPORT_AUDIT_FIXES.md
+- AI_SUPPORT_CHECK_CONNECTION_BUTTON.md
+- AI_SUPPORT_DISCOVERY_HINTS.md
+- AI_SUPPORT_FAQ_FALLBACK_FIX.md
+- AI_SUPPORT_FAQ_LAYER.md
+- AI_SUPPORT_FINAL_AUDIT.md
+- AI_SUPPORT_INTENT_AND_FAQ_EXPANSION.md
+- AI_SUPPORT_INTENT_PATTERN_EXPANSION.md
+- AI_SUPPORT_LOG_USER_TEXT.md
+- AI_SUPPORT_MVP_IMPLEMENTATION_REPORT.md
+- AI_SUPPORT_ONBOARDING_WIREGUARD_STEP.md
+- AI_SUPPORT_POST_CONFIG_CHECK.md
+- AI_SUPPORT_POST_CONFIG_CHECK_HARDENING.md
+- AI_SUPPORT_POST_PUSH_VERIFICATION.md
+- AI_SUPPORT_PRE_PUSH_REVIEW.md
+- AI_SUPPORT_REFERRAL_PROMPT_AFTER_SUCCESS.md
+- AI_SUPPORT_SEMANTIC_MATCH_AND_MEMORY.md
+- AI_SUPPORT_TROUBLESHOOTING_HANDSHAKE_FRESHNESS.md
+- AI_SUPPORT_VPN_SYMPTOM_DIAGNOSTICS.md
+
+В `docs/ai-support/` уже были: AI_SUPPORT_ANALYTICS_REPORT.md, AI_SUPPORT_PATCH_V1.md, AI_SUPPORT_TROUBLESHOOTING_V1.md, ARCHITECTURE_AUDIT_AI_SUPPORT.md, faq.md.
+
+### 2. CRM → docs/crm/
+
+- CRM_HANDSHAKE_CONVERSION.md → docs/crm/
+
+### 3. Onboarding → docs/onboarding/
+
+- ONBOARDING_CONNECTION_FLOW.md → docs/onboarding/
+
+---
+
+## Что осталось в корне
+
+- README.md, README cmd.md, TERMS.md, PRIVACY.md
+- docker-compose.yml, Dockerfile, requirements.txt, pytest.ini
+- Каталоги: app/, scripts/, tests/, logs/, .git/, .github/
+- .env, .env.example
+
+---
+
+## Ссылки в Markdown
+
+Проверены ссылки на перенесённые файлы. В `docs/ai-support/AI_SUPPORT_ANALYTICS_REPORT.md` путь уже указан как `docs/ai-support/AI_SUPPORT_ANALYTICS_REPORT.md` — правки не потребовались.
+
+---
+
+## Текущее дерево docs/
+
+```
+docs/
+   ai-support/
+      AI_SUPPORT_ANALYTICS_REPORT.md
+      AI_SUPPORT_ARCHITECTURE_REVIEW.md
+      AI_SUPPORT_AUDIT_FIXES.md
+      AI_SUPPORT_CHECK_CONNECTION_BUTTON.md
+      AI_SUPPORT_DISCOVERY_HINTS.md
+      AI_SUPPORT_FAQ_FALLBACK_FIX.md
+      AI_SUPPORT_FAQ_LAYER.md
+      AI_SUPPORT_FINAL_AUDIT.md
+      AI_SUPPORT_INTENT_AND_FAQ_EXPANSION.md
+      AI_SUPPORT_INTENT_PATTERN_EXPANSION.md
+      AI_SUPPORT_LOG_USER_TEXT.md
+      AI_SUPPORT_MVP_IMPLEMENTATION_REPORT.md
+      AI_SUPPORT_ONBOARDING_WIREGUARD_STEP.md
+      AI_SUPPORT_PATCH_V1.md
+      AI_SUPPORT_POST_CONFIG_CHECK.md
+      AI_SUPPORT_POST_CONFIG_CHECK_HARDENING.md
+      AI_SUPPORT_POST_PUSH_VERIFICATION.md
+      AI_SUPPORT_PRE_PUSH_REVIEW.md
+      AI_SUPPORT_REFERRAL_PROMPT_AFTER_SUCCESS.md
+      AI_SUPPORT_SEMANTIC_MATCH_AND_MEMORY.md
+      AI_SUPPORT_TROUBLESHOOTING_HANDSHAKE_FRESHNESS.md
+      AI_SUPPORT_TROUBLESHOOTING_V1.md
+      AI_SUPPORT_VPN_SYMPTOM_DIAGNOSTICS.md
+      ARCHITECTURE_AUDIT_AI_SUPPORT.md
+      faq.md
+   crm/
+      CRM_HANDSHAKE_CONVERSION.md
+   onboarding/
+      ONBOARDING_CONNECTION_FLOW.md
+   DUPLICATE_IP_ROOT_CAUSE.md
+   OVERCREDIT_DAYS_ANALYSIS.md
+```
