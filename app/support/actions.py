@@ -13,12 +13,15 @@ from ..messages import (
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
+    PRICING_HEADER,
     PRIVACY_POLICY_RESPONSE,
     REFERRAL_BALANCE_RESPONSE,
     REFERRAL_INFO_RESPONSE,
     REFERRAL_STATS_RESPONSE,
+    SUBSCRIPTION_TEXT,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
+    TARIFFS_UNAVAILABLE,
     VPN_SYMPTOM_MEDIA_PROBLEM,
     VPN_SYMPTOM_SITES_NOT_LOADING,
     VPN_SYMPTOM_SLOW_SPEED,
@@ -191,6 +194,42 @@ def action_referral_balance() -> Tuple[str, InlineKeyboardMarkup]:
         ]
     )
     return REFERRAL_BALANCE_RESPONSE, kb
+
+
+def action_pricing_info() -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Ответ на вопросы про стоимость/тарифы. Тот же текст, что в /subscription:
+    заголовок, список тарифов из БД, SUBSCRIPTION_TEXT. Клавиатура: /buy и /buy_crypto (pay:open, heleket:open).
+    """
+    lines = [PRICING_HEADER]
+    try:
+        tariffs = db.get_active_tariffs()
+    except Exception:
+        tariffs = []
+    if not tariffs:
+        lines.append(TARIFFS_UNAVAILABLE)
+    else:
+        for t in tariffs:
+            title = t.get("title") or ""
+            amount = t.get("yookassa_amount")
+            if amount is not None:
+                try:
+                    amount_str = str(int(amount))
+                except (ValueError, TypeError):
+                    amount_str = str(amount)
+            else:
+                amount_str = "?"
+            lines.append(f"🔹 <b>{title}</b> — <b>{amount_str} ₽</b>")
+        lines.append("")
+    lines.append(SUBSCRIPTION_TEXT)
+    text = "\n".join(lines)
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Оплатить картой (/buy)", callback_data="pay:open")],
+            [InlineKeyboardButton(text="₿ Криптой (/buy_crypto)", callback_data="heleket:open")],
+        ]
+    )
+    return text, kb
 
 
 def action_smalltalk() -> str:

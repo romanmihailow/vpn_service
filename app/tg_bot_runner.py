@@ -44,13 +44,16 @@ from .messages import (
     ONBOARDING_READY_BUTTON,
     ONBOARDING_WG_CONFIRM_MESSAGE,
     ONBOARDING_WG_DOWNLOAD_MESSAGE,
+    PRICING_HEADER,
     REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
     REF_LINK_WELCOME_TEXT,
     REF_TRIAL_BUTTON_TEXT,
     REF_TRIAL_CONFIG_CAPTION,
+    SUBSCRIPTION_TEXT,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_DISCOVERY_TEXT,
     SUPPORT_URL,
+    TARIFFS_UNAVAILABLE,
     WG_APP_STORE_URL,
     WG_DESKTOP_URL,
     WG_PLAY_MARKET_URL,
@@ -1020,20 +1023,6 @@ SUPPORT_TEXT = (
 )
 
 
-SUBSCRIPTION_TEXT = (
-    "<b>Почему выгоднее брать сразу на дольше:</b>\n"
-    "• 3 месяца: экономия <b>30 ₽</b> (−10% к помесячной оплате).\n"
-    "• 6 месяцев: экономия <b>120 ₽</b> (−20% к помесячной оплате).\n"
-    "• 1 год: экономия <b>360 ₽</b> (−30% к помесячной оплате).\n\n"
-    "Оплатить доступ можно:\n"
-    "• банковской картой в рублях через ЮKassa (команда /buy);\n"
-    "• криптовалютой через Heleket (команда /buy_crypto).\n\n"
-    "Чтобы оформить подписку, воспользуйся командами /buy или /buy_crypto "
-    "или нажми нужную кнопку под этим сообщением.\n\n"
-    "🌐 Официальный сайт: https://maxnetvpn.ru"
-)
-
-
 REF_INFO_TEXT = (
     "🤝 <b>Реферальная программа MaxNet VPN</b>\n\n"
     "Приглашай друзей по своей ссылке и получай баллы, которыми можно оплачивать подписку.\n\n"
@@ -1253,11 +1242,11 @@ async def cmd_subscription(message: Message) -> None:
     lines = []
 
     # Шапка
-    lines.append("💳 <b>Тарифы MaxNet VPN</b>\n")
+    lines.append(PRICING_HEADER)
 
     if not tariffs:
         # fallback, если с БД что-то не так
-        lines.append("Сейчас тарифы временно недоступны. Попробуй позже.\n")
+        lines.append(TARIFFS_UNAVAILABLE)
     else:
         # Формируем список тарифов из таблицы tariffs
         for t in tariffs:
@@ -4255,6 +4244,10 @@ async def cmd_crm_report(message: Message) -> None:
         return
 
     r = report
+    payments_count = r["welcome_after_first_payment"]
+    handshake_count = r["handshake_user_connected"]
+    conversion_pct = (handshake_count * 100 // payments_count) if payments_count > 0 else 0
+
     vpn_ok_pct = ""
     if r["handshake_followup_10m"] > 0:
         vpn_ok_pct = f" ({100 * r['vpn_ok_clicked'] // r['handshake_followup_10m']}%)"
@@ -4264,8 +4257,13 @@ async def cmd_crm_report(message: Message) -> None:
 
     text = (
         f"<b>CRM-отчёт за {days} дней</b>\n\n"
+        "<b>Оплаты:</b>\n"
+        f"• первые платные подписки: {payments_count}\n\n"
+        "<b>Подключения:</b>\n"
+        f"• первый handshake: {handshake_count}\n\n"
+        "<b>Конверсия подключения:</b>\n"
+        f"• оплата → VPN подключен: {conversion_pct}%\n\n"
         "<b>Воронка подключений:</b>\n"
-        f"• первый handshake: {r['handshake_user_connected']}\n"
         f"• follow-up через 10 минут: {r['handshake_followup_10m']}\n"
         f"• «Всё работает» нажали: {r['vpn_ok_clicked']}{vpn_ok_pct}\n"
         f"• follow-up через 2 часа: {r['handshake_followup_2h']}\n"
@@ -4277,9 +4275,7 @@ async def cmd_crm_report(message: Message) -> None:
         f"• напоминание через 24 часа: {r['no_handshake_24h']}\n"
         f"• напоминание через 5 дней: {r['no_handshake_5d']}\n"
         f"• опрос причины отказа: {r['no_handshake_survey']}\n\n"
-        "<b>Оплаты:</b>\n"
-        f"• первые платные подписки: {r['welcome_after_first_payment']}\n"
-        f"• welcome после оплаты: {r['welcome_after_first_payment']}\n"
+        "<b>Прочее:</b>\n"
         f"• первые оплаты после handshake: {r['first_paid_with_prior_handshake']}\n"
     )
 

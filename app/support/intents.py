@@ -2,7 +2,7 @@
 Классификация намерений пользователя (rule-based MVP).
 Порядок: human_request → missing_config_after_payment → resend_config →
 vpn_not_working → privacy_policy → referral_stats → referral_balance → referral_info →
-connect_help → subscription_status → handshake_status → smalltalk → unclear.
+subscription_status → pricing_info → connect_help → handshake_status → smalltalk → unclear.
 """
 import re
 from typing import Dict, Any
@@ -100,6 +100,17 @@ STATUS_PATTERNS = [
     r"до когда работает vpn",
     r"до когда работает подписка",
 ]
+PRICING_PATTERNS = [
+    r"сколько стоит",
+    r"цена",
+    r"стоимость",
+    r"тариф",
+    r"тарифы",
+    r"сколько стоит vpn",
+    r"цена vpn",
+    r"сколько стоит подписка",
+    r"стоимость подписки",
+]
 HANDSHAKE_PATTERNS = [
     r"handshake", r"подключился ли", r"подключилась ли", r"есть ли подключение",
     r"vpn работает", r"работает ли vpn", r"соединение установлено",
@@ -166,19 +177,23 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if _match_patterns(t, REFERRAL_PATTERNS):
         return IntentResult(intent="referral_info", confidence=0.85)
 
-    # 9. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
-    if _match_patterns(t, CONNECT_HELP_PATTERNS):
-        return IntentResult(intent="connect_help", confidence=0.85)
-
-    # 10. subscription_status
+    # 9. subscription_status
     if _match_patterns(t, STATUS_PATTERNS):
         return IntentResult(intent="subscription_status", confidence=0.85)
 
-    # 11. handshake_status
+    # 10. pricing_info (после subscription_status, перед connect_help)
+    if _match_patterns(t, PRICING_PATTERNS):
+        return IntentResult(intent="pricing_info", confidence=0.85)
+
+    # 11. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
+    if _match_patterns(t, CONNECT_HELP_PATTERNS):
+        return IntentResult(intent="connect_help", confidence=0.85)
+
+    # 12. handshake_status
     if _match_patterns(t, HANDSHAKE_PATTERNS):
         return IntentResult(intent="handshake_status", confidence=0.8)
 
-    # 12. smalltalk
+    # 13. smalltalk
     short = t.lower().strip()
     if short in SMALLTALK_PHRASES:
         return IntentResult(intent="smalltalk", confidence=0.7)
@@ -192,5 +207,5 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if short in ("подписка", "статус", "до когда"):
         return IntentResult(intent="subscription_status", confidence=0.7)
 
-    # 10. unclear
+    # 14. unclear
     return IntentResult(intent="unclear", confidence=0.2)

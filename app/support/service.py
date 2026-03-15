@@ -26,6 +26,7 @@ from .actions import (
     action_human_request,
     action_connect_help,
     action_privacy_policy,
+    action_pricing_info,
     action_referral_info,
     action_referral_stats,
     action_referral_balance,
@@ -217,6 +218,10 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     elif result.intent == "subscription_status":
         meta["action"] = "subscription_status"
         reply_text = action_subscription_status(context)
+
+    elif result.intent == "pricing_info":
+        meta["action"] = "pricing_info"
+        reply_text, reply_markup = action_pricing_info()
 
     elif result.intent == "handshake_status":
         meta["action"] = "handshake_status"
