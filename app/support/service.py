@@ -1,0 +1,229 @@
+"""
+AI Support: оркестрация обработки сообщения.
+Использует context, intents, guardrails, actions. Опционально — OpenAI для формулировки.
+"""
+import os
+from typing import Any, Dict, Optional, Tuple
+
+from aiogram.types import InlineKeyboardMarkup, Message
+
+from .. import db
+from ..logger import get_support_ai_logger
+
+from .context_builder import build_user_context
+from .intents import classify_intent
+from .guardrails import (
+    get_safe_fallback,
+    get_support_offer,
+    should_handle_directly,
+    should_handoff_to_human,
+)
+from .actions import (
+    action_resend_config,
+    action_subscription_status,
+    action_handshake_status,
+    action_human_request,
+    action_connect_help,
+    action_missing_config_after_payment,
+    action_smalltalk,
+    action_vpn_not_working,
+)
+
+log = get_support_ai_logger()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+_openai_client = None
+
+
+def _get_openai_client():
+    global _openai_client
+    if _openai_client is None and OPENAI_API_KEY:
+        try:
+            from openai import OpenAI
+            _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        except Exception:
+            _openai_client = False
+    return _openai_client if _openai_client else None
+
+
+def _format_context_summary(ctx: Dict[str, Any]) -> str:
+    parts = []
+    if ctx.get("has_active_subscription"):
+        parts.append("активная подписка")
+        if ctx.get("expires_at"):
+            parts.append(f"до {ctx.get('expires_at')}")
+        parts.append(f"тип: {ctx.get('subscription_type', 'unknown')}")
+    else:
+        parts.append("нет активной подписки")
+    if ctx.get("can_resend_config"):
+        parts.append("можно resend config")
+    if ctx.get("has_handshake"):
+        parts.append("handshake есть")
+    return "; ".join(parts)
+
+
+async def _call_openai_for_phrase(user_message: str, context: Dict[str, Any]) -> Optional[str]:
+    """Опционально: сформулировать ответ через OpenAI."""
+    client = _get_openai_client()
+    if not client:
+        return None
+    try:
+        from .prompts import SYSTEM_PROMPT, build_user_prompt
+        summary = _format_context_summary(context)
+        user_prompt = build_user_prompt(user_message, summary)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=300,
+            temperature=0.3,
+        )
+        if resp.choices:
+            return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        log.warning("OpenAI phrase failed: %r", e)
+    return None
+
+
+async def process_support_message(message: Message) -> Tuple[str, Optional[InlineKeyboardMarkup], Dict[str, Any]]:
+    """
+    Обрабатывает support-сообщение.
+    Возвращает (текст_ответа, reply_markup, meta для логирования).
+    """
+    text = (message.text or "").strip()
+    user_id = message.from_user.id if message.from_user else 0
+    meta: Dict[str, Any] = {
+        "intent": None,
+        "confidence": None,
+        "action": None,
+        "fallback": False,
+        "handoff_to_human": False,
+        "resend_done": False,
+    }
+
+    if not text or not user_id:
+        return get_safe_fallback(), None, meta
+
+    context = build_user_context(user_id)
+    result = classify_intent(text, context)
+    meta["intent"] = result.intent
+    meta["confidence"] = result.confidence
+
+    # Human request — сразу handoff
+    if result.intent == "human_request":
+        meta["handoff_to_human"] = True
+        txt, km = action_human_request()
+        return txt, km, meta
+
+    # Guardrails
+    can_handle, fallback_text = should_handle_directly(result.intent, result.confidence)
+    if not can_handle and fallback_text:
+        meta["fallback"] = True
+        if should_handoff_to_human(result.intent, result.confidence):
+            meta["handoff_to_human"] = True
+            fallback_text += "\n\n" + get_support_offer()
+            kb = None
+            try:
+                from ..messages import SUPPORT_URL, SUPPORT_BUTTON_TEXT
+                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+                ])
+            except Exception:
+                pass
+            return fallback_text, kb, meta
+        return fallback_text, None, meta
+
+    # Actions
+    reply_text = ""
+    reply_markup = None
+
+    if result.intent == "resend_config":
+        meta["action"] = "resend_config"
+        reply_text, ok, reply_markup = await action_resend_config(user_id, context)
+        meta["resend_done"] = ok
+
+    elif result.intent == "missing_config_after_payment":
+        meta["action"] = "missing_config_after_payment"
+        txt, do_resend, km = action_missing_config_after_payment(context)
+        if do_resend:
+            reply_text, ok, reply_markup = await action_resend_config(user_id, context)
+            meta["resend_done"] = ok
+            if ok:
+                reply_text = "Конфиг отправлен. Проверь сообщения выше."
+        else:
+            reply_text = txt
+            reply_markup = km
+            meta["handoff_to_human"] = True
+
+    elif result.intent == "subscription_status":
+        meta["action"] = "subscription_status"
+        reply_text = action_subscription_status(context)
+
+    elif result.intent == "handshake_status":
+        meta["action"] = "handshake_status"
+        reply_text = action_handshake_status(context)
+
+    elif result.intent == "connect_help":
+        meta["action"] = "connect_help"
+        reply_text = action_connect_help()
+
+    elif result.intent == "vpn_not_working":
+        meta["action"] = "vpn_not_working"
+        reply_text, reply_markup, meta["vpn_diagnosis"] = action_vpn_not_working(context)
+
+    elif result.intent == "smalltalk":
+        meta["action"] = "smalltalk"
+        reply_text = action_smalltalk()
+
+    else:
+        meta["action"] = "unclear"
+        meta["fallback"] = True
+        meta["handoff_to_human"] = True
+        if OPENAI_API_KEY:
+            ai_text = await _call_openai_for_phrase(text, context)
+            if ai_text:
+                reply_text = ai_text + "\n\n" + get_support_offer()
+            else:
+                reply_text = get_safe_fallback() + "\n\n" + get_support_offer()
+        else:
+            reply_text = get_safe_fallback() + "\n\n" + get_support_offer()
+
+        try:
+            from ..messages import SUPPORT_URL, SUPPORT_BUTTON_TEXT
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+            ])
+        except Exception:
+            pass
+
+    # Логирование
+    try:
+        db.log_support_conversation(
+            telegram_user_id=user_id,
+            user_message=text,
+            ai_response=reply_text[:500] if reply_text else None,
+            detected_intent=meta["intent"],
+            confidence=meta["confidence"],
+            mode="ai",
+            handoff_to_human=meta["handoff_to_human"],
+        )
+    except Exception as e:
+        log.warning("Failed to log support conversation: %r", e)
+
+    log.info(
+        "support_ai tg_id=%s intent=%s conf=%.2f action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s",
+        user_id,
+        meta["intent"],
+        meta["confidence"] or 0,
+        meta["action"],
+        meta["fallback"],
+        meta["handoff_to_human"],
+        meta["resend_done"],
+        meta.get("vpn_diagnosis") or "",
+    )
+
+    return reply_text, reply_markup, meta

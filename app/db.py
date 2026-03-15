@@ -334,6 +334,26 @@ def init_db() -> None:
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_provider_event
         ON payment_events (provider, event_id);
+
+    --------------------------------------------------------------------
+    -- AI Support: логирование диалогов поддержки
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS support_conversations (
+        id BIGSERIAL PRIMARY KEY,
+        telegram_user_id BIGINT NOT NULL,
+        user_message TEXT NOT NULL,
+        ai_response TEXT,
+        detected_intent VARCHAR(64),
+        confidence NUMERIC(5, 4),
+        mode VARCHAR(16) NOT NULL DEFAULT 'ai',
+        handoff_to_human BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_support_conversations_telegram
+        ON support_conversations (telegram_user_id);
+    CREATE INDEX IF NOT EXISTS idx_support_conversations_created
+        ON support_conversations (created_at DESC);
     """
 
 
@@ -341,6 +361,38 @@ def init_db() -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(create_table_sql)
+        conn.commit()
+
+
+def log_support_conversation(
+    telegram_user_id: int,
+    user_message: str,
+    ai_response: Optional[str],
+    detected_intent: Optional[str],
+    confidence: Optional[float],
+    mode: str = "ai",
+    handoff_to_human: bool = False,
+) -> None:
+    """Записывает диалог AI Support в support_conversations."""
+    sql = """
+    INSERT INTO support_conversations
+        (telegram_user_id, user_message, ai_response, detected_intent, confidence, mode, handoff_to_human)
+    VALUES (%s, %s, %s, %s, %s, %s, %s);
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    telegram_user_id,
+                    user_message[:10000] if user_message else "",
+                    ai_response[:10000] if ai_response else None,
+                    detected_intent[:64] if detected_intent else None,
+                    confidence,
+                    mode[:16] if mode else "ai",
+                    handoff_to_human,
+                ),
+            )
         conn.commit()
 
 

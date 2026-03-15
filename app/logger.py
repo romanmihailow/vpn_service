@@ -6,6 +6,7 @@ VPN_LOG_FILE = os.path.join(LOG_DIR, "vpn_service.log")
 YOOKASSA_LOG_FILE = os.path.join(LOG_DIR, "yookassa.log")
 HELEKET_LOG_FILE = os.path.join(LOG_DIR, "heleket.log")
 PROMO_LOG_FILE = os.path.join(LOG_DIR, "promo.log")
+SUPPORT_AI_LOG_FILE = os.path.join(LOG_DIR, "support_ai.log")
 
 
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -72,4 +73,19 @@ def get_heleket_logger():
 
 def get_promo_logger():
     return promo_logger
+
+
+# ===== логгер AI support =====
+support_ai_logger = logging.getLogger("support_ai")
+support_ai_logger.setLevel(logging.INFO)
+
+if not support_ai_logger.handlers:
+    sup_fh = logging.FileHandler(SUPPORT_AI_LOG_FILE, encoding="utf-8")
+    sup_fh.setLevel(logging.INFO)
+    sup_fh.setFormatter(formatter)
+    support_ai_logger.addHandler(sup_fh)
+
+
+def get_support_ai_logger():
+    return support_ai_logger
 

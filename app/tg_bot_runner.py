@@ -43,6 +43,8 @@ from .promo_codes import (
     generate_promo_codes,
     build_insert_sql_for_postgres,
 )
+from .support.router import support_router
+
 log = get_logger()
 promo_log = get_promo_logger()
 
@@ -6765,6 +6767,7 @@ async def main() -> None:
 
     dp = Dispatcher()
     dp.include_router(router)
+    dp.include_router(support_router)  # AI Support — fallback для свободного текста
 
     # Снимаем webhook, чтобы polling получал апдейты (webhook и polling взаимоисключают друг друга)
     try:
