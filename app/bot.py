@@ -13,6 +13,7 @@ from .messages import (
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
+    SUPPORT_AFTER_CONFIG_HINT,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
 )
@@ -85,9 +86,10 @@ async def send_vpn_config_to_user(
                 [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
             ]
         )
+        instruction_with_hint = CONNECTION_INSTRUCTION_SHORT + "\n\n" + SUPPORT_AFTER_CONFIG_HINT
         await bot.send_message(
             chat_id=telegram_user_id,
-            text=CONNECTION_INSTRUCTION_SHORT,
+            text=instruction_with_hint,
             parse_mode=None,
             disable_web_page_preview=True,
             reply_markup=support_keyboard,

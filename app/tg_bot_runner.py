@@ -31,6 +31,7 @@ from .messages import (
     REF_TRIAL_BUTTON_TEXT,
     REF_TRIAL_CONFIG_CAPTION,
     SUPPORT_BUTTON_TEXT,
+    SUPPORT_DISCOVERY_TEXT,
     SUPPORT_URL,
 )
 from . import wg
@@ -936,7 +937,7 @@ async def cmd_start(message: Message) -> None:
                 # 4. Если регистрация успешна — показываем onboarding и кнопку триала
                 if reg_res and reg_res.get("ok"):
                     await message.answer(
-                        REF_LINK_WELCOME_TEXT,
+                        REF_LINK_WELCOME_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
                         reply_markup=REF_TRIAL_KEYBOARD,
                         parse_mode="HTML",
                     )
@@ -949,7 +950,7 @@ async def cmd_start(message: Message) -> None:
                     )
                     if active_sub and active_sub.get("active"):
                         await message.answer(
-                            REF_LINK_WELCOME_TEXT,
+                            REF_LINK_WELCOME_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
                             reply_markup=REF_TRIAL_KEYBOARD,
                             parse_mode="HTML",
                         )
@@ -970,7 +971,7 @@ async def cmd_start(message: Message) -> None:
             )
 
     await message.answer(
-        START_TEXT,
+        START_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
         reply_markup=get_start_keyboard(user.id if user else 0),
     )
 
