@@ -33,13 +33,20 @@ from .messages import (
     CONFIG_CHECK_NOW_UNKNOWN,
     CONFIG_CHECK_OPTIONS,
     CONFIG_CHECK_SUCCESS,
+    CONFIG_CHECK_NOW_BUTTON_TEXT,
     HELP_INSTRUCTION,
+    ONBOARDING_WG_CONFIRM_MESSAGE,
+    ONBOARDING_WG_DOWNLOAD_MESSAGE,
+    REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
     REF_LINK_WELCOME_TEXT,
     REF_TRIAL_BUTTON_TEXT,
     REF_TRIAL_CONFIG_CAPTION,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_DISCOVERY_TEXT,
     SUPPORT_URL,
+    WG_APP_STORE_URL,
+    WG_DESKTOP_URL,
+    WG_PLAY_MARKET_URL,
 )
 from . import wg
 from .format_admin import fmt_date, fmt_ref_display, fmt_user_line
@@ -3216,6 +3223,22 @@ async def config_check_ok_callback(callback: CallbackQuery) -> None:
     except Exception as e:
         log.warning("[ConfigCheck] Failed to record config_check_ok sub_id=%s: %r", sub_id, e)
 
+    ref_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👥 Пригласить друга",
+                    callback_data=f"ref:open_from_notify:{sub_id}",
+                ),
+            ],
+        ]
+    )
+    await callback.message.answer(
+        REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
+        reply_markup=ref_kb,
+    )
+    log.info("[ReferralPrompt] tg_id=%s source=config_check_ok", callback.from_user.id if callback.from_user else None)
+
 
 @router.callback_query(F.data.startswith("config_check_failed:"))
 async def config_check_failed_callback(callback: CallbackQuery) -> None:
@@ -3353,6 +3376,54 @@ async def config_issue_support_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     text, reply_markup = action_human_request()
     await callback.message.answer(text, reply_markup=reply_markup)
+
+
+# ---- Onboarding после конфига: WireGuard установлен? ----
+
+@router.callback_query(F.data == "onboarding:wireguard_download")
+async def onboarding_wireguard_download_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Скачать WireGuard» — ссылки на официальные загрузки."""
+    if callback.from_user:
+        log.info("[Onboarding] tg_id=%s step=wireguard_download", callback.from_user.id)
+    await callback.answer()
+    download_kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🍏 App Store", url=WG_APP_STORE_URL)],
+            [InlineKeyboardButton(text="🤖 Play Market", url=WG_PLAY_MARKET_URL)],
+            [InlineKeyboardButton(text="💻 Windows / Mac", url=WG_DESKTOP_URL)],
+        ]
+    )
+    await callback.message.answer(
+        ONBOARDING_WG_DOWNLOAD_MESSAGE,
+        reply_markup=download_kb,
+    )
+
+
+@router.callback_query(F.data.startswith("onboarding:wireguard_confirm:"))
+async def onboarding_wireguard_confirm_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Да, установлен» — напомнить импорт/QR и кнопка «Проверить подключение»."""
+    if callback.from_user:
+        log.info("[Onboarding] tg_id=%s step=wireguard_confirm", callback.from_user.id)
+    await callback.answer()
+    data = callback.data or ""
+    parts = data.split(":", 2)
+    sub_id = int(parts[2]) if len(parts) >= 3 and parts[2].isdigit() else 0
+    if sub_id > 0:
+        sub = db.get_subscription_by_id(sub_id)
+        if sub and callback.from_user and sub.get("telegram_user_id") == callback.from_user.id:
+            check_kb = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=CONFIG_CHECK_NOW_BUTTON_TEXT,
+                            callback_data=f"config_check_now:{sub_id}",
+                        ),
+                    ],
+                ]
+            )
+            await callback.message.answer(ONBOARDING_WG_CONFIRM_MESSAGE, reply_markup=check_kb)
+            return
+    await callback.message.answer(ONBOARDING_WG_CONFIRM_MESSAGE)
 
 
 @router.message(Command("ref_info"))

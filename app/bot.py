@@ -15,6 +15,9 @@ from .messages import (
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
+    ONBOARDING_WG_DOWNLOAD_BUTTON,
+    ONBOARDING_WIREGUARD_QUESTION,
+    ONBOARDING_WG_YES_BUTTON,
     SUPPORT_AFTER_CONFIG_HINT,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
@@ -173,6 +176,30 @@ async def send_vpn_config_to_user(
             reply_markup=instruction_keyboard,
         )
         log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
+
+        sub_id = sub.get("id") if sub and sub.get("id") else 0
+        onboarding_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=ONBOARDING_WG_YES_BUTTON,
+                        callback_data=f"onboarding:wireguard_confirm:{sub_id}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=ONBOARDING_WG_DOWNLOAD_BUTTON,
+                        callback_data="onboarding:wireguard_download",
+                    ),
+                ],
+            ]
+        )
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=ONBOARDING_WIREGUARD_QUESTION,
+            reply_markup=onboarding_keyboard,
+        )
+        log.info("[Onboarding] tg_id=%s step=wireguard_check", telegram_user_id)
 
         if schedule_checkpoint:
             try:

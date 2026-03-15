@@ -39,6 +39,31 @@ CONFIG_QR_CAPTION = (
     "Отсканируй QR (нужен второй телефон) или импортируй файл из сообщения выше 👆"
 )
 
+# === Onboarding после выдачи конфига: установлен ли WireGuard ===
+ONBOARDING_WIREGUARD_QUESTION = "📱 У тебя уже установлен WireGuard?"
+
+ONBOARDING_WG_YES_BUTTON = "✅ Да, установлен"
+ONBOARDING_WG_DOWNLOAD_BUTTON = "⬇️ Скачать WireGuard"
+
+ONBOARDING_WG_DOWNLOAD_MESSAGE = (
+    "Скачай приложение WireGuard:\n\n"
+    "🍏 App Store\n"
+    "🤖 Play Market\n"
+    "💻 Windows / Mac"
+)
+
+WG_APP_STORE_URL = "https://apps.apple.com/app/wireguard/id1441195209"
+WG_PLAY_MARKET_URL = "https://play.google.com/store/apps/details?id=com.wireguard.android"
+WG_DESKTOP_URL = "https://www.wireguard.com/install/"
+
+ONBOARDING_WG_CONFIRM_MESSAGE = (
+    "Отлично 👍\n\n"
+    "Теперь сделай одно из двух:\n\n"
+    "1️⃣ Импортируй файл vpn.conf из сообщения выше\n"
+    "или\n"
+    "2️⃣ Сканируй QR-код"
+)
+
 # === Caption по умолчанию (Tribute и др.) ===
 DEFAULT_CONFIG_CAPTION = (
     "Спасибо за подписку через Tribute!\n\n"
@@ -101,6 +126,13 @@ CONFIG_CHECK_MESSAGE = "Удалось подключиться к VPN?"
 CONFIG_CHECK_SUCCESS = (
     "Отлично 👌\n\n"
     "Если что-то понадобится позже — просто напишите мне."
+)
+
+# Реферальный призыв после подтверждения «Всё работает» в checkpoint
+REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS = (
+    "🎉 Отлично! VPN работает.\n\n"
+    "Кстати, можно получить бесплатные дни VPN.\n\n"
+    "Пригласи друзей по своей ссылке — и получай дни VPN на баланс."
 )
 
 CONFIG_CHECK_FAIL = "Понял. Что именно не получилось?"
