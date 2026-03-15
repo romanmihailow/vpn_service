@@ -2,10 +2,13 @@
 Сборщик контекста пользователя для AI Support.
 Read-only, использует существующие функции проекта.
 """
+import time
 from typing import Any, Dict
 
 from .. import db
 from .. import wg
+
+HANDSHAKE_FRESH_SEC = 300
 
 
 def build_user_context(telegram_user_id: int) -> Dict[str, Any]:
@@ -25,6 +28,9 @@ def build_user_context(telegram_user_id: int) -> Dict[str, Any]:
         "points_balance": 0,
         "has_referrer": False,
         "has_handshake": False,
+        "last_handshake_ts": 0,
+        "handshake_age_sec": None,
+        "handshake_state": "none",
         "vpn_ip": None,
         "wg_public_key": None,
         "can_resend_config": False,
@@ -78,15 +84,27 @@ def build_user_context(telegram_user_id: int) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Handshake
+    # Handshake и свежесть
     pub_key = sub.get("wg_public_key")
     if pub_key:
         try:
             handshakes = wg.get_handshake_timestamps()
             ts = handshakes.get((pub_key or "").strip(), 0)
             ctx["has_handshake"] = ts > 0
+            ctx["last_handshake_ts"] = ts
+            if ts > 0:
+                now = int(time.time())
+                age = now - ts
+                ctx["handshake_age_sec"] = age
+                if age <= HANDSHAKE_FRESH_SEC:
+                    ctx["handshake_state"] = "fresh"
+                else:
+                    ctx["handshake_state"] = "stale"
+            else:
+                ctx["handshake_state"] = "none"
         except Exception:
             ctx["has_handshake"] = False
+            ctx["handshake_state"] = "none"
 
     # Можно ли получить триал по рефералке
     try:

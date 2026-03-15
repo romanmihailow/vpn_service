@@ -70,6 +70,13 @@ DEFAULT_CONFIG_CAPTION = (
     "Файл vpn.conf — в этом сообщении. QR-код — в следующем 👇"
 )
 
+# === Реферальная подсказка (intent referral_info) ===
+REFERRAL_INFO_RESPONSE = (
+    "Ты можешь приглашать друзей в MaxNet VPN.\n\n"
+    "Когда друг оформляет подписку, ты получаешь бонусные дни VPN.\n\n"
+    "Нажми кнопку ниже, чтобы получить свою реферальную ссылку."
+)
+
 # === Кнопка помощи после выдачи конфига ===
 SUPPORT_BUTTON_TEXT = "🧑‍💻 Нужна помощь"
 SUPPORT_URL = "https://t.me/MaxNet_VPN_Support"

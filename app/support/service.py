@@ -24,6 +24,7 @@ from .actions import (
     action_handshake_status,
     action_human_request,
     action_connect_help,
+    action_referral_info,
     action_missing_config_after_payment,
     action_smalltalk,
     action_vpn_not_working,
@@ -171,6 +172,10 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     elif result.intent == "connect_help":
         meta["action"] = "connect_help"
         reply_text = action_connect_help()
+
+    elif result.intent == "referral_info":
+        meta["action"] = "referral_info"
+        reply_text, reply_markup = action_referral_info()
 
     elif result.intent == "vpn_not_working":
         meta["action"] = "vpn_not_working"

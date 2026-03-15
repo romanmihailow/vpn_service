@@ -10,8 +10,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .. import db, wg
 from ..bot import send_vpn_config_to_user
 from ..messages import (
+    CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
+    REFERRAL_INFO_RESPONSE,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
 )
@@ -148,6 +150,16 @@ def action_connect_help() -> str:
     return HELP_INSTRUCTION
 
 
+def action_referral_info() -> Tuple[str, InlineKeyboardMarkup]:
+    """Ответ на вопросы про реферальную программу; кнопка «Пригласить друга»."""
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref:open_from_notify")],
+        ]
+    )
+    return REFERRAL_INFO_RESPONSE, kb
+
+
 def action_smalltalk() -> str:
     """Ответ на smalltalk (кто ты, привет и т.д.)."""
     return (
@@ -160,16 +172,34 @@ def action_smalltalk() -> str:
     )
 
 
+def _stale_keyboard(subscription_id: Any) -> InlineKeyboardMarkup:
+    """Клавиатура для ветки handshake_stale: проверить подключение + поддержка."""
+    sub_id = subscription_id if subscription_id is not None else 0
+    rows = []
+    if sub_id:
+        rows.append([
+            InlineKeyboardButton(
+                text=CONFIG_CHECK_NOW_BUTTON_TEXT,
+                callback_data=f"config_check_now:{sub_id}",
+            ),
+        ])
+    rows.append([InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[InlineKeyboardMarkup], str]:
     """
     Диагностический flow для intent vpn_not_working.
     Анализирует контекст и возвращает (текст, кнопка, vpn_diagnosis для лога).
+    Учитывает handshake_state: none / fresh / stale.
     """
     has_sub = context.get("has_active_subscription")
     can_resend = context.get("can_resend_config")
     has_handshake = context.get("has_handshake")
+    handshake_state = context.get("handshake_state") or "none"
     vpn_ip = context.get("vpn_ip")
     wg_public_key = context.get("wg_public_key")
+    subscription_id = context.get("subscription_id")
 
     # Ветка 1 — нет активной подписки
     if not has_sub:
@@ -189,8 +219,8 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "no_config_data",
         )
 
-    # Ветка 3 — подписка есть, handshake нет (туннель не установлен)
-    if has_handshake is False:
+    # Ветка 3 — handshake нет (туннель не установлен)
+    if handshake_state == "none" or has_handshake is False:
         return (
             "Подключение к VPN ещё не установлено — скорее всего, туннель не включён или конфиг не добавлен.\n\n"
             "Что сделать:\n"
@@ -202,8 +232,21 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "no_handshake",
         )
 
-    # Ветка 4 — handshake есть (подключение установлено)
-    if has_handshake is True:
+    # Ветка 4 — handshake есть, но устарел (stale)
+    if handshake_state == "stale":
+        return (
+            "VPN подключался раньше, но сейчас соединение не выглядит активным.\n\n"
+            "Попробуй:\n"
+            "1. Выключить и снова включить туннель в WireGuard\n"
+            "2. Перезапустить приложение WireGuard\n"
+            "3. Нажать «🔍 Проверить подключение» и проверить снова\n\n"
+            "Если не поможет — напиши в поддержку.",
+            _stale_keyboard(subscription_id),
+            "handshake_stale",
+        )
+
+    # Ветка 5 — handshake свежий (подключение установлено)
+    if handshake_state == "fresh" or has_handshake is True:
         return (
             "VPN-подключение у тебя установлено. Значит, проблема, скорее всего, уже после подключения.\n\n"
             "Попробуй:\n"
@@ -215,7 +258,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "handshake_ok",
         )
 
-    # Ветка 5 — неизвестный / неполный статус
+    # Ветка 6 — неизвестный / неполный статус
     return (
         "Не удалось точно определить причину. Лучше напиши в поддержку — они разберутся.",
         _support_keyboard(),

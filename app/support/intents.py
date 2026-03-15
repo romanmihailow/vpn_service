@@ -1,8 +1,8 @@
 """
 Классификация намерений пользователя (rule-based MVP).
-Порядок проверки: human_request → missing_config_after_payment → resend_config →
-vpn_not_working → connect_help → subscription_status → handshake_status →
-smalltalk → unclear.
+Порядок: human_request → missing_config_after_payment → resend_config →
+vpn_not_working → referral_info → connect_help → subscription_status →
+handshake_status → smalltalk → unclear.
 """
 import re
 from typing import Dict, Any
@@ -29,11 +29,18 @@ VPN_NOT_WORKING_PATTERNS = [
     r"включил vpn но ничего не открывается",
     r"vpn подключился но интернет не работает",
 ]
+REFERRAL_PATTERNS = [
+    r"реферал", r"рефераль", r"реферальная программа", r"пригласить друга",
+    r"моя ссылка", r"реферальная ссылка", r"как пригласить друга",
+    r"как поделиться ссылкой", r"сколько рефералов", r"сколько друзей",
+    r"рефералы", r"рефералов", r"приглашения",
+    r"бонусные дни", r"пригласил друга",
+]
 CONNECT_HELP_PATTERNS = [
-    r"как подключ", r"как установить", r"wireguard", r"настроить",
-    r"импорт", r"qr", r"подключ", r"не работает подключ",
-    r"помоги подключ", r"помоги с подключ", r"как настроить vpn",
-    r"как подключить vpn", r"не могу подключ",
+    r"как подключить vpn", r"как подключиться\b", r"помоги подключить",
+    r"помоги с подключением", r"не могу подключить",
+    r"как настроить vpn", r"как установить\b", r"wireguard",
+    r"импорт", r"\bqr\b", r"не работает подключение",
 ]
 STATUS_PATTERNS = [
     r"до какого", r"до какой даты", r"когда истекает", r"срок подписк",
@@ -64,7 +71,8 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     """
     Rule-based классификация намерения.
     Порядок: human → missing_config → resend → vpn_not_working →
-    connect_help → subscription_status → handshake_status → smalltalk → unclear.
+    referral_info → connect_help → subscription_status → handshake_status →
+    smalltalk → unclear.
     """
     t = (text or "").strip()
     if not t or len(t) < 2:
@@ -90,19 +98,23 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if _match_patterns(t, VPN_NOT_WORKING_PATTERNS):
         return IntentResult(intent="vpn_not_working", confidence=0.8)
 
-    # 5. connect_help
+    # 5. referral_info (до connect_help, чтобы «рефералов подключились» не попал в connect_help)
+    if _match_patterns(t, REFERRAL_PATTERNS):
+        return IntentResult(intent="referral_info", confidence=0.85)
+
+    # 6. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
     if _match_patterns(t, CONNECT_HELP_PATTERNS):
         return IntentResult(intent="connect_help", confidence=0.85)
 
-    # 6. subscription_status
+    # 7. subscription_status
     if _match_patterns(t, STATUS_PATTERNS):
         return IntentResult(intent="subscription_status", confidence=0.85)
 
-    # 7. handshake_status
+    # 8. handshake_status
     if _match_patterns(t, HANDSHAKE_PATTERNS):
         return IntentResult(intent="handshake_status", confidence=0.8)
 
-    # 8. smalltalk
+    # 9. smalltalk
     short = t.lower().strip()
     if short in SMALLTALK_PHRASES:
         return IntentResult(intent="smalltalk", confidence=0.7)
@@ -116,5 +128,5 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if short in ("подписка", "статус", "до когда"):
         return IntentResult(intent="subscription_status", confidence=0.7)
 
-    # 9. unclear
+    # 10. unclear
     return IntentResult(intent="unclear", confidence=0.2)
