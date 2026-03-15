@@ -364,6 +364,36 @@ def init_db() -> None:
         conn.commit()
 
 
+def get_last_support_conversation(
+    telegram_user_id: int,
+    within_seconds: int = 300,
+) -> Optional[Dict[str, Any]]:
+    """
+    Возвращает последнее сообщение пользователя в support_conversations,
+    если оно было не позже within_seconds секунд назад.
+    Нужно для short-term conversation memory (reuse предыдущего intent при unclear).
+    """
+    sql = """
+    SELECT detected_intent, created_at
+    FROM support_conversations
+    WHERE telegram_user_id = %s
+      AND created_at >= NOW() - INTERVAL '1 second' * %s
+      AND detected_intent IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (telegram_user_id, within_seconds))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "detected_intent": row["detected_intent"],
+        "created_at": row["created_at"],
+    }
+
+
 def log_support_conversation(
     telegram_user_id: int,
     user_message: str,

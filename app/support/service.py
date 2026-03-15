@@ -1,9 +1,10 @@
 """
 AI Support: оркестрация обработки сообщения.
 Использует context, intents, guardrails, actions. Опционально — OpenAI для формулировки.
+Расширения: semantic FAQ match при unclear, short-term conversation memory, intent_source в логах.
 """
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram.types import InlineKeyboardMarkup, Message
 
@@ -29,8 +30,21 @@ from .actions import (
     action_smalltalk,
     action_vpn_not_working,
 )
+from .models import IntentResult
 
 log = get_support_ai_logger()
+
+# --- Semantic FAQ match: ключевые слова для unclear → детерминированный ответ ---
+# Порядок проверки: более специфичные первыми (multi_device, speed, sites)
+_FAQ_SITES_KEYWORDS: List[str] = ["сайты", "не открываются", "не грузятся"]
+_FAQ_SPEED_KEYWORDS: List[str] = ["скорость", "медленно", "тормозит"]
+_FAQ_MULTI_DEVICE_KEYWORDS: List[str] = [
+    "два устройства", "два телефона", "несколько устройств",
+    "несколько телефонов", "другое устройство", "второй телефон",
+]
+
+MEMORY_REUSE_INTENTS = frozenset({"vpn_not_working", "connect_help", "referral_info"})
+MEMORY_WINDOW_SEC = 300
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 _openai_client = None
@@ -61,6 +75,26 @@ def _format_context_summary(ctx: Dict[str, Any]) -> str:
     if ctx.get("has_handshake"):
         parts.append("handshake есть")
     return "; ".join(parts)
+
+
+def _semantic_faq_match(text: str) -> Optional[str]:
+    """
+    При unclear: проверяет, совпадает ли сообщение с темами FAQ по ключевым словам.
+    Возвращает intent для детерминированного ответа: vpn_not_working | speed_issue | multi_device.
+    """
+    if not text or not text.strip():
+        return None
+    lower = text.strip().lower()
+    for kw in _FAQ_SITES_KEYWORDS:
+        if kw in lower:
+            return "vpn_not_working"
+    for kw in _FAQ_SPEED_KEYWORDS:
+        if kw in lower:
+            return "speed_issue"
+    for kw in _FAQ_MULTI_DEVICE_KEYWORDS:
+        if kw in lower:
+            return "multi_device"
+    return None
 
 
 async def _call_openai_for_phrase(user_message: str, context: Dict[str, Any]) -> Optional[str]:
@@ -103,15 +137,29 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         "fallback": False,
         "handoff_to_human": False,
         "resend_done": False,
+        "intent_source": "rule",
     }
 
     if not text or not user_id:
+        meta["intent_source"] = "fallback"
         return get_safe_fallback(), None, meta
 
     context = build_user_context(user_id)
     result = classify_intent(text, context)
     meta["intent"] = result.intent
     meta["confidence"] = result.confidence
+
+    # Short-term conversation memory: при unclear с низкой уверенностью — переиспользовать последний intent
+    if result.intent == "unclear" and (result.confidence or 0) < 0.7:
+        try:
+            last = db.get_last_support_conversation(user_id, MEMORY_WINDOW_SEC)
+            if last and last.get("detected_intent") in MEMORY_REUSE_INTENTS:
+                result = IntentResult(intent=last["detected_intent"], confidence=0.85)
+                meta["intent"] = result.intent
+                meta["confidence"] = result.confidence
+                meta["intent_source"] = "memory"
+        except Exception as e:
+            log.warning("Conversation memory fetch failed: %r", e)
 
     # Human request — сразу handoff
     if result.intent == "human_request":
@@ -189,23 +237,46 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         meta["action"] = "unclear"
         meta["fallback"] = True
         meta["handoff_to_human"] = True
-        if OPENAI_API_KEY:
-            ai_text = await _call_openai_for_phrase(text, context)
-            if ai_text:
-                reply_text = ai_text + "\n\n" + get_support_offer()
+
+        # Semantic FAQ match before OpenAI: сайты/скорость/устройства → детерминированный ответ
+        faq_matched_intent = _semantic_faq_match(text)
+        if faq_matched_intent:
+            meta["intent_source"] = "faq_match"
+            meta["fallback"] = False
+            meta["handoff_to_human"] = False
+            if faq_matched_intent == "vpn_not_working":
+                meta["action"] = "vpn_not_working"
+                reply_text, reply_markup, meta["vpn_diagnosis"] = action_vpn_not_working(context)
+            elif faq_matched_intent == "speed_issue":
+                from ..messages import SPEED_ISSUE_FAQ_RESPONSE
+                reply_text = SPEED_ISSUE_FAQ_RESPONSE
+                reply_markup = None
+            elif faq_matched_intent == "multi_device":
+                from ..messages import MULTI_DEVICE_FAQ_RESPONSE
+                reply_text = MULTI_DEVICE_FAQ_RESPONSE
+                reply_markup = None
+
+        if not faq_matched_intent:
+            meta["intent_source"] = "openai" if OPENAI_API_KEY else "fallback"
+            if OPENAI_API_KEY:
+                ai_text = await _call_openai_for_phrase(text, context)
+                if ai_text:
+                    reply_text = ai_text + "\n\n" + get_support_offer()
+                    meta["intent_source"] = "openai"
+                else:
+                    reply_text = get_safe_fallback() + "\n\n" + get_support_offer()
+                    meta["intent_source"] = "fallback"
             else:
                 reply_text = get_safe_fallback() + "\n\n" + get_support_offer()
-        else:
-            reply_text = get_safe_fallback() + "\n\n" + get_support_offer()
 
-        try:
-            from ..messages import SUPPORT_URL, SUPPORT_BUTTON_TEXT
-            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
-            ])
-        except Exception:
-            pass
+            try:
+                from ..messages import SUPPORT_URL, SUPPORT_BUTTON_TEXT
+                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+                ])
+            except Exception:
+                pass
 
     # Логирование
     try:
@@ -224,10 +295,11 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     text_for_log = (text or "").replace("\n", " ").replace("\r", " ").strip()[:300]
     text_for_log = text_for_log.replace('"', '\\"')
     log.info(
-        "support_ai tg_id=%s intent=%s conf=%.2f action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s text=\"%s\"",
+        "support_ai tg_id=%s intent=%s conf=%.2f source=%s action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s text=\"%s\"",
         user_id,
         meta["intent"],
         meta["confidence"] or 0,
+        meta.get("intent_source", "rule"),
         meta["action"],
         meta["fallback"],
         meta["handoff_to_human"],
