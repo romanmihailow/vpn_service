@@ -216,8 +216,10 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     except Exception as e:
         log.warning("Failed to log support conversation: %r", e)
 
+    text_for_log = (text or "").replace("\n", " ").replace("\r", " ").strip()[:300]
+    text_for_log = text_for_log.replace('"', '\\"')
     log.info(
-        "support_ai tg_id=%s intent=%s conf=%.2f action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s",
+        "support_ai tg_id=%s intent=%s conf=%.2f action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s text=\"%s\"",
         user_id,
         meta["intent"],
         meta["confidence"] or 0,
@@ -226,6 +228,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         meta["handoff_to_human"],
         meta["resend_done"],
         meta.get("vpn_diagnosis") or "",
+        text_for_log,
     )
 
     return reply_text, reply_markup, meta
