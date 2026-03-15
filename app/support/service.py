@@ -68,9 +68,10 @@ async def _call_openai_for_phrase(user_message: str, context: Dict[str, Any]) ->
     if not client:
         return None
     try:
-        from .prompts import SYSTEM_PROMPT, build_user_prompt
+        from .prompts import SYSTEM_PROMPT, build_user_prompt, get_faq_text
         summary = _format_context_summary(context)
-        user_prompt = build_user_prompt(user_message, summary)
+        faq_text = get_faq_text()
+        user_prompt = build_user_prompt(user_message, summary, faq_text=faq_text)
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
