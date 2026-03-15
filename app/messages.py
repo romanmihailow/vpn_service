@@ -64,6 +64,24 @@ ONBOARDING_WG_CONFIRM_MESSAGE = (
     "2️⃣ Сканируй QR-код"
 )
 
+# === Onboarding пошаговое подключение (кнопка «Подключить VPN») ===
+ONBOARDING_START_BUTTON = "🚀 Подключить VPN"
+ONBOARDING_DEVICE_QUESTION = "Какое у тебя устройство?"
+ONBOARDING_DEVICE_IPHONE = "🍏 iPhone"
+ONBOARDING_DEVICE_ANDROID = "🤖 Android"
+ONBOARDING_DEVICE_COMPUTER = "💻 Компьютер"
+ONBOARDING_INSTALL_MOBILE = (
+    "1️⃣ Установи приложение WireGuard\n"
+    "2️⃣ Вернись сюда и нажми «Готово»"
+)
+ONBOARDING_READY_BUTTON = "✔ Готово"
+ONBOARDING_IMPORT_CONFIG = (
+    "Теперь импортируй конфиг:\n\n"
+    "• файл vpn.conf\n"
+    "или\n"
+    "• QR-код"
+)
+
 # === Caption по умолчанию (Tribute и др.) ===
 DEFAULT_CONFIG_CAPTION = (
     "Спасибо за подписку через Tribute!\n\n"

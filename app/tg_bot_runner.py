@@ -35,6 +35,13 @@ from .messages import (
     CONFIG_CHECK_SUCCESS,
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     HELP_INSTRUCTION,
+    ONBOARDING_DEVICE_ANDROID,
+    ONBOARDING_DEVICE_COMPUTER,
+    ONBOARDING_DEVICE_IPHONE,
+    ONBOARDING_DEVICE_QUESTION,
+    ONBOARDING_IMPORT_CONFIG,
+    ONBOARDING_INSTALL_MOBILE,
+    ONBOARDING_READY_BUTTON,
     ONBOARDING_WG_CONFIRM_MESSAGE,
     ONBOARDING_WG_DOWNLOAD_MESSAGE,
     REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
@@ -3377,6 +3384,80 @@ async def config_issue_support_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     text, reply_markup = action_human_request()
     await callback.message.answer(text, reply_markup=reply_markup)
+
+
+# ---- Onboarding пошаговое подключение (кнопка «Подключить VPN») ----
+
+@router.callback_query(F.data == "onboarding:start")
+async def onboarding_start_callback(callback: CallbackQuery) -> None:
+    """Шаг 1: выбор устройства."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    log.info("[Onboarding] step=start tg_id=%s", user_id)
+    await callback.answer()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ONBOARDING_DEVICE_IPHONE, callback_data="onboarding:device:iphone")],
+            [InlineKeyboardButton(text=ONBOARDING_DEVICE_ANDROID, callback_data="onboarding:device:android")],
+            [InlineKeyboardButton(text=ONBOARDING_DEVICE_COMPUTER, callback_data="onboarding:device:computer")],
+        ]
+    )
+    await callback.message.answer(ONBOARDING_DEVICE_QUESTION, reply_markup=kb)
+
+
+def _onboarding_step3_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура шага 3: Проверить подключение (если есть sub_id)."""
+    sub = None
+    try:
+        sub = db.get_latest_subscription_for_telegram(user_id)
+    except Exception:
+        pass
+    if sub and sub.get("id"):
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=CONFIG_CHECK_NOW_BUTTON_TEXT,
+                        callback_data=f"config_check_now:{sub['id']}",
+                    ),
+                ],
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+
+@router.callback_query(F.data == "onboarding:device:iphone")
+@router.callback_query(F.data == "onboarding:device:android")
+async def onboarding_device_mobile_callback(callback: CallbackQuery) -> None:
+    """Шаг 2 (iPhone/Android): установи WireGuard, затем «Готово»."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    log.info("[Onboarding] step=device_selected tg_id=%s device=%s", user_id, callback.data)
+    await callback.answer()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ONBOARDING_READY_BUTTON, callback_data="onboarding:ready")],
+        ]
+    )
+    await callback.message.answer(ONBOARDING_INSTALL_MOBILE, reply_markup=kb)
+
+
+@router.callback_query(F.data == "onboarding:device:computer")
+async def onboarding_device_computer_callback(callback: CallbackQuery) -> None:
+    """Шаг 3 для компьютера: импорт конфига + Проверить подключение."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    log.info("[Onboarding] step=ready_for_import tg_id=%s device=computer", user_id)
+    await callback.answer()
+    kb = _onboarding_step3_keyboard(user_id)
+    await callback.message.answer(ONBOARDING_IMPORT_CONFIG, reply_markup=kb)
+
+
+@router.callback_query(F.data == "onboarding:ready")
+async def onboarding_ready_callback(callback: CallbackQuery) -> None:
+    """После «Готово» на мобильном: шаг 3 — импорт конфига + Проверить подключение."""
+    user_id = callback.from_user.id if callback.from_user else 0
+    log.info("[Onboarding] step=ready_for_import tg_id=%s", user_id)
+    await callback.answer()
+    kb = _onboarding_step3_keyboard(user_id)
+    await callback.message.answer(ONBOARDING_IMPORT_CONFIG, reply_markup=kb)
 
 
 # ---- Onboarding после конфига: WireGuard установлен? ----

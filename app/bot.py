@@ -15,6 +15,7 @@ from .messages import (
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
+    ONBOARDING_START_BUTTON,
     ONBOARDING_WG_DOWNLOAD_BUTTON,
     ONBOARDING_WIREGUARD_QUESTION,
     ONBOARDING_WG_YES_BUTTON,
@@ -154,6 +155,12 @@ async def send_vpn_config_to_user(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
+                            text=ONBOARDING_START_BUTTON,
+                            callback_data="onboarding:start",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
                             text=CONFIG_CHECK_NOW_BUTTON_TEXT,
                             callback_data=f"config_check_now:{sub['id']}",
                         ),
@@ -164,6 +171,12 @@ async def send_vpn_config_to_user(
         else:
             instruction_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=ONBOARDING_START_BUTTON,
+                            callback_data="onboarding:start",
+                        ),
+                    ],
                     [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
                 ]
             )
