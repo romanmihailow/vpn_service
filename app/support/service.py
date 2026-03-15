@@ -138,6 +138,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         "handoff_to_human": False,
         "resend_done": False,
         "intent_source": "rule",
+        "vpn_symptom": "",
     }
 
     if not text or not user_id:
@@ -227,7 +228,9 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
 
     elif result.intent == "vpn_not_working":
         meta["action"] = "vpn_not_working"
-        reply_text, reply_markup, meta["vpn_diagnosis"] = action_vpn_not_working(context)
+        reply_text, reply_markup, meta["vpn_diagnosis"], meta["vpn_symptom"] = action_vpn_not_working(
+            context, user_message=text
+        )
 
     elif result.intent == "smalltalk":
         meta["action"] = "smalltalk"
@@ -246,7 +249,9 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
             meta["handoff_to_human"] = False
             if faq_matched_intent == "vpn_not_working":
                 meta["action"] = "vpn_not_working"
-                reply_text, reply_markup, meta["vpn_diagnosis"] = action_vpn_not_working(context)
+                reply_text, reply_markup, meta["vpn_diagnosis"], meta["vpn_symptom"] = action_vpn_not_working(
+                    context, user_message=text
+                )
             elif faq_matched_intent == "speed_issue":
                 from ..messages import SPEED_ISSUE_FAQ_RESPONSE
                 reply_text = SPEED_ISSUE_FAQ_RESPONSE
@@ -295,7 +300,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     text_for_log = (text or "").replace("\n", " ").replace("\r", " ").strip()[:300]
     text_for_log = text_for_log.replace('"', '\\"')
     log.info(
-        "support_ai tg_id=%s intent=%s conf=%.2f source=%s action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s text=\"%s\"",
+        "support_ai tg_id=%s intent=%s conf=%.2f source=%s action=%s fallback=%s handoff=%s resend=%s vpn_diagnosis=%s vpn_symptom=%s text=\"%s\"",
         user_id,
         meta["intent"],
         meta["confidence"] or 0,
@@ -305,6 +310,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         meta["handoff_to_human"],
         meta["resend_done"],
         meta.get("vpn_diagnosis") or "",
+        meta.get("vpn_symptom") or "",
         text_for_log,
     )
 

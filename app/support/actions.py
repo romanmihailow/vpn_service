@@ -16,7 +16,12 @@ from ..messages import (
     REFERRAL_INFO_RESPONSE,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
+    VPN_SYMPTOM_MEDIA_PROBLEM,
+    VPN_SYMPTOM_SITES_NOT_LOADING,
+    VPN_SYMPTOM_SLOW_SPEED,
 )
+
+from .symptoms import classify_vpn_symptom
 
 RESEND_COOLDOWN_SEC = 30
 RESEND_COOLDOWN: Dict[int, float] = {}
@@ -187,11 +192,14 @@ def _stale_keyboard(subscription_id: Any) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[InlineKeyboardMarkup], str]:
+def action_vpn_not_working(
+    context: Dict[str, Any],
+    user_message: Optional[str] = None,
+) -> Tuple[str, Optional[InlineKeyboardMarkup], str, str]:
     """
     Диагностический flow для intent vpn_not_working.
-    Анализирует контекст и возвращает (текст, кнопка, vpn_diagnosis для лога).
-    Учитывает handshake_state: none / fresh / stale.
+    Возвращает (текст, кнопка, vpn_diagnosis, vpn_symptom).
+    При handshake_state == "fresh" использует классификатор симптомов по формулировке пользователя.
     """
     has_sub = context.get("has_active_subscription")
     can_resend = context.get("can_resend_config")
@@ -200,6 +208,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
     vpn_ip = context.get("vpn_ip")
     wg_public_key = context.get("wg_public_key")
     subscription_id = context.get("subscription_id")
+    empty_symptom = ""
 
     # Ветка 1 — нет активной подписки
     if not has_sub:
@@ -208,6 +217,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "Если ты уже оплатил — лучше напиши в поддержку, они проверят.",
             _support_keyboard(),
             "no_subscription",
+            empty_symptom,
         )
 
     # Ветка 2 — подписка есть, но нет данных для конфига
@@ -217,6 +227,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "Обратись в поддержку — они помогут.",
             _support_keyboard(),
             "no_config_data",
+            empty_symptom,
         )
 
     # Ветка 3 — handshake нет (туннель не установлен)
@@ -230,6 +241,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "Если не получится — нажми кнопку ниже.",
             _support_keyboard(),
             "no_handshake",
+            empty_symptom,
         )
 
     # Ветка 4 — handshake есть, но устарел (stale)
@@ -243,10 +255,34 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "Если не поможет — напиши в поддержку.",
             _stale_keyboard(subscription_id),
             "handshake_stale",
+            empty_symptom,
         )
 
-    # Ветка 5 — handshake свежий (подключение установлено)
+    # Ветка 5 — handshake свежий: ответ по симптому (sites_not_loading / slow_speed / media_problem / generic)
     if handshake_state == "fresh" or has_handshake is True:
+        symptom = classify_vpn_symptom(user_message or "")
+        if symptom == "sites_not_loading":
+            return (
+                VPN_SYMPTOM_SITES_NOT_LOADING,
+                _support_keyboard(),
+                "handshake_ok",
+                "sites_not_loading",
+            )
+        if symptom == "slow_speed":
+            return (
+                VPN_SYMPTOM_SLOW_SPEED,
+                _support_keyboard(),
+                "handshake_ok",
+                "slow_speed",
+            )
+        if symptom == "media_problem":
+            return (
+                VPN_SYMPTOM_MEDIA_PROBLEM,
+                _support_keyboard(),
+                "handshake_ok",
+                "media_problem",
+            )
+        # generic_problem — прежний универсальный ответ
         return (
             "VPN-подключение у тебя установлено. Значит, проблема, скорее всего, уже после подключения.\n\n"
             "Попробуй:\n"
@@ -256,6 +292,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
             "Если не поможет — напиши в поддержку.",
             _support_keyboard(),
             "handshake_ok",
+            "generic_problem",
         )
 
     # Ветка 6 — неизвестный / неполный статус
@@ -263,6 +300,7 @@ def action_vpn_not_working(context: Dict[str, Any]) -> Tuple[str, Optional[Inlin
         "Не удалось точно определить причину. Лучше напиши в поддержку — они разберутся.",
         _support_keyboard(),
         "unknown",
+        empty_symptom,
     )
 
 

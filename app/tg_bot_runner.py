@@ -3366,7 +3366,7 @@ async def config_issue_connected_no_internet_callback(callback: CallbackQuery) -
     await callback.answer()
     user_id = callback.from_user.id if callback.from_user else 0
     context = build_user_context(user_id)
-    text, reply_markup, _ = action_vpn_not_working(context)
+    text, reply_markup, _diagnosis, _symptom = action_vpn_not_working(context)
     await callback.message.answer(text, reply_markup=reply_markup)
 
 
