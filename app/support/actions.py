@@ -14,6 +14,7 @@ from ..messages import (
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
     REFERRAL_INFO_RESPONSE,
+    REFERRAL_STATS_RESPONSE,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
     VPN_SYMPTOM_MEDIA_PROBLEM,
@@ -165,6 +166,16 @@ def action_referral_info() -> Tuple[str, InlineKeyboardMarkup]:
     return REFERRAL_INFO_RESPONSE, kb
 
 
+def action_referral_stats() -> Tuple[str, InlineKeyboardMarkup]:
+    """Ответ на вопросы про баллы/бонусные дни; кнопка «Пригласить друга»."""
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref:open_from_notify")],
+        ]
+    )
+    return REFERRAL_STATS_RESPONSE, kb
+
+
 def action_smalltalk() -> str:
     """Ответ на smalltalk (кто ты, привет и т.д.)."""
     return (
@@ -258,8 +269,8 @@ def action_vpn_not_working(
             empty_symptom,
         )
 
-    # Ветка 5 — handshake свежий: ответ по симптому (sites_not_loading / slow_speed / media_problem / generic)
-    if handshake_state == "fresh" or has_handshake is True:
+    # Ветка 5 — handshake свежий: ответ по симптому только при handshake_state == "fresh"
+    if handshake_state == "fresh":
         symptom = classify_vpn_symptom(user_message or "")
         if symptom == "sites_not_loading":
             return (
@@ -293,6 +304,20 @@ def action_vpn_not_working(
             _support_keyboard(),
             "handshake_ok",
             "generic_problem",
+        )
+
+    # Ветка 5b — handshake есть, но не fresh (напр. state не задан): универсальный ответ без симптома
+    if has_handshake is True:
+        return (
+            "VPN-подключение у тебя установлено. Значит, проблема, скорее всего, уже после подключения.\n\n"
+            "Попробуй:\n"
+            "1. Выключить и снова включить туннель в WireGuard\n"
+            "2. Перезапустить приложение WireGuard\n"
+            "3. Проверить, открываются ли сайты через другую сеть (мобильный интернет)\n\n"
+            "Если не поможет — напиши в поддержку.",
+            _support_keyboard(),
+            "handshake_ok",
+            "",
         )
 
     # Ветка 6 — неизвестный / неполный статус

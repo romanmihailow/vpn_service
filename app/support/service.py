@@ -26,6 +26,7 @@ from .actions import (
     action_human_request,
     action_connect_help,
     action_referral_info,
+    action_referral_stats,
     action_missing_config_after_payment,
     action_smalltalk,
     action_vpn_not_working,
@@ -138,6 +139,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         "handoff_to_human": False,
         "resend_done": False,
         "intent_source": "rule",
+        "vpn_diagnosis": "",
         "vpn_symptom": "",
     }
 
@@ -225,6 +227,10 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     elif result.intent == "referral_info":
         meta["action"] = "referral_info"
         reply_text, reply_markup = action_referral_info()
+
+    elif result.intent == "referral_stats":
+        meta["action"] = "referral_stats"
+        reply_text, reply_markup = action_referral_stats()
 
     elif result.intent == "vpn_not_working":
         meta["action"] = "vpn_not_working"

@@ -1,7 +1,7 @@
 """
 Классификация намерений пользователя (rule-based MVP).
 Порядок: human_request → missing_config_after_payment → resend_config →
-vpn_not_working → referral_info → connect_help → subscription_status →
+vpn_not_working → referral_info → referral_stats → connect_help → subscription_status →
 handshake_status → smalltalk → unclear.
 """
 import re
@@ -14,13 +14,26 @@ HUMAN_PATTERNS = [
     r"оператор", r"человек", r"поддержк", r"позовите", r"передайте",
     r"связаться", r"позвонить", r"с человеком", r"живой", r"консультант",
 ]
+# Границы слов для оплатил/оплатила/заплатил/купил — чтобы «оплатили» не срабатывало (рефералы)
 MISSING_CONFIG_PATTERNS = [
-    r"оплатил", r"оплатила", r"заплатил", r"купил", r"конфиг после оплаты",
+    r"\bоплатил\b", r"\bоплатила\b", r"\bзаплатил\b", r"\bкупил\b",
+    r"конфиг после оплаты",
     r"не пришел после оплаты", r"после оплаты не пришел",
 ]
-RESEND_PATTERNS = [
-    r"не пришел", r"не пришёл", r"не пришел конфиг", r"конфиг не пришел",
-    r"отправь конфиг", r"перешли конфиг", r"повторно отправь", r"вышли конфиг",
+# Строгие фразы: только явный запрос конфига (избегаем ложных срабатываний на «рефералов оплатили» и т.п.)
+RESEND_CONFIG_PATTERNS = [
+    r"\bвышли конфиг\b",
+    r"\bпришли конфиг\b",
+    r"\bотправь конфиг\b",
+    r"\bповтори конфиг\b",
+    r"\bпришли vpn конфиг\b",
+    r"\bпришли конфигурацию\b",
+    r"\bперешли конфиг\b",
+    r"\bконфиг не пришел\b",
+    r"\bконфиг не пришёл\b",
+    r"\bне пришел конфиг\b",
+    r"\bне пришёл конфиг\b",
+    r"\bконфиг пожалуйста\b",
 ]
 VPN_NOT_WORKING_PATTERNS = [
     r"vpn не работает",
@@ -35,6 +48,13 @@ REFERRAL_PATTERNS = [
     r"как поделиться ссылкой", r"сколько рефералов", r"сколько друзей",
     r"рефералы", r"рефералов", r"приглашения",
     r"бонусные дни", r"пригласил друга",
+]
+REFERRAL_STATS_PATTERNS = [
+    r"сколько баллов",
+    r"сколько бонус",
+    r"сколько бонусных дней",
+    r"сколько у меня бонус",
+    r"мой баланс бонус",
 ]
 CONNECT_HELP_PATTERNS = [
     r"как подключить vpn", r"как подключиться\b", r"помоги подключить",
@@ -88,8 +108,8 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
             return IntentResult(intent="missing_config_after_payment", confidence=0.85)
         return IntentResult(intent="missing_config_after_payment", confidence=0.9)
 
-    # 3. resend_config
-    if _match_patterns(t, RESEND_PATTERNS):
+    # 3. resend_config (только явный запрос конфига)
+    if _match_patterns(t, RESEND_CONFIG_PATTERNS):
         if context.get("has_active_subscription"):
             return IntentResult(intent="resend_config", confidence=0.9)
         return IntentResult(intent="missing_config_after_payment", confidence=0.7)
@@ -102,25 +122,29 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if _match_patterns(t, REFERRAL_PATTERNS):
         return IntentResult(intent="referral_info", confidence=0.85)
 
-    # 6. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
+    # 6. referral_stats (баллы, бонусные дни — до connect_help)
+    if _match_patterns(t, REFERRAL_STATS_PATTERNS):
+        return IntentResult(intent="referral_stats", confidence=0.85)
+
+    # 7. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
     if _match_patterns(t, CONNECT_HELP_PATTERNS):
         return IntentResult(intent="connect_help", confidence=0.85)
 
-    # 7. subscription_status
+    # 8. subscription_status
     if _match_patterns(t, STATUS_PATTERNS):
         return IntentResult(intent="subscription_status", confidence=0.85)
 
-    # 8. handshake_status
+    # 9. handshake_status
     if _match_patterns(t, HANDSHAKE_PATTERNS):
         return IntentResult(intent="handshake_status", confidence=0.8)
 
-    # 9. smalltalk
+    # 10. smalltalk
     short = t.lower().strip()
     if short in SMALLTALK_PHRASES:
         return IntentResult(intent="smalltalk", confidence=0.7)
 
-    # Краткие фразы (resend / status)
-    if short in ("конфиг", "конфиг пожалуйста", "вышли конфиг", "отправь конфиг"):
+    # Краткие фразы (только явный запрос конфига)
+    if short in ("вышли конфиг", "отправь конфиг", "пришли конфиг", "конфиг пожалуйста"):
         if context.get("has_active_subscription"):
             return IntentResult(intent="resend_config", confidence=0.9)
         return IntentResult(intent="unclear", confidence=0.3)

@@ -3,7 +3,7 @@ import io
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.enums import ParseMode
@@ -50,7 +50,7 @@ from .messages import (
 )
 from . import wg
 from .format_admin import fmt_date, fmt_ref_display, fmt_user_line
-from .logger import get_logger, get_promo_logger
+from .logger import get_logger, get_promo_logger, SUPPORT_AI_LOG_FILE
 from .yookassa_client import create_yookassa_payment
 from .heleket_client import create_heleket_payment
 from .promo_codes import (
@@ -1154,6 +1154,7 @@ ADMIN_INFO_TEXT = (
     "/bonus_list — файл с ID: каждому +100 баллов и отправка сообщения.\n\n"
     "/promo_admin — сгенерировать SQL для вставки промокодов в таблицу promo_codes.\n\n"
     "/admin_stats — диагностика IP-пула и активных подписок.\n"
+    "/support_stats — статистика AI-support за 24ч (intents, source, vpn_diagnosis).\n"
     "/crm_report [дней] — CRM-отчёт по воронке (по умолчанию 7 дней)."
 )
 
@@ -4071,6 +4072,83 @@ async def cmd_admin_stats(message: Message) -> None:
         return
 
     await send_admin_stats(message)
+
+
+def _parse_support_ai_log_for_stats(hours: int = 24) -> Tuple[Dict[str, int], Dict[str, int]]:
+    """
+    Парсит support_ai.log за последние hours часов.
+    Возвращает (source_counts, vpn_diagnosis_counts).
+    """
+    import re
+    source_counts: Dict[str, int] = defaultdict(int)
+    vpn_diagnosis_counts: Dict[str, int] = defaultdict(int)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+    log_path = Path(SUPPORT_AI_LOG_FILE)
+    if not log_path.is_file():
+        return dict(source_counts), dict(vpn_diagnosis_counts)
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "support_ai " not in line:
+                    continue
+                # Формат: "2025-03-12 10:00:00,000 - INFO - support_ai tg_id=..."
+                parts = line.split(" - ", 2)
+                if len(parts) < 3:
+                    continue
+                try:
+                    ts_str = parts[0].strip()
+                    if "," in ts_str:
+                        ts_str = ts_str.split(",")[0]
+                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                msg = parts[2]
+                m = re.search(r"source=(\S+)", msg)
+                if m:
+                    source_counts[m.group(1)] += 1
+                m = re.search(r"vpn_diagnosis=(\S+)", msg)
+                if m:
+                    vpn_diagnosis_counts[m.group(1)] += 1
+    except Exception as e:
+        log.warning("[SupportStats] Log parse error: %r", e)
+    return dict(source_counts), dict(vpn_diagnosis_counts)
+
+
+@router.message(Command("support_stats"))
+async def cmd_support_stats(message: Message) -> None:
+    """Админ-команда: краткая статистика AI-support за последние 24ч (intents, source, vpn_diagnosis)."""
+    if not is_admin(message):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    try:
+        intent_rows = db.get_support_conversation_intent_stats(hours=24)
+        source_counts, vpn_diagnosis_counts = _parse_support_ai_log_for_stats(hours=24)
+    except Exception as e:
+        log.error("[SupportStats] Failed to get stats: %r", e)
+        await message.answer("Не удалось получить статистику. См. логи.")
+        return
+
+    lines = ["<b>AI SUPPORT STATS (last 24h)</b>\n"]
+    lines.append("<b>By source:</b>")
+    for key in ("rule", "memory", "faq_match", "openai", "fallback"):
+        lines.append(f"{key}: {source_counts.get(key, 0)}")
+    lines.append("")
+    lines.append("<b>Top intents:</b>")
+    for intent, cnt in intent_rows[:10]:
+        lines.append(f"{intent}: {cnt}")
+    lines.append("")
+    lines.append("<b>Top VPN diagnoses:</b>")
+    sorted_diag = sorted(vpn_diagnosis_counts.items(), key=lambda x: -x[1])[:10]
+    for diag, cnt in sorted_diag:
+        lines.append(f"{diag}: {cnt}")
+    if not sorted_diag:
+        lines.append("(none)")
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @router.message(Command("crm_report"))

@@ -394,6 +394,26 @@ def get_last_support_conversation(
     }
 
 
+def get_support_conversation_intent_stats(hours: int = 24) -> List[Tuple[str, int]]:
+    """
+    Возвращает счётчики по detected_intent за последние hours часов.
+    Для команды /support_stats (top intents).
+    """
+    sql = """
+    SELECT detected_intent AS intent, COUNT(*) AS cnt
+    FROM support_conversations
+    WHERE created_at >= NOW() - (%s || ' hours')::interval
+      AND detected_intent IS NOT NULL
+      AND detected_intent != ''
+    GROUP BY detected_intent
+    ORDER BY cnt DESC;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (hours,))
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+
 def log_support_conversation(
     telegram_user_id: int,
     user_message: str,
