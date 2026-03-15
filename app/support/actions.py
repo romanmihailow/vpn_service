@@ -13,6 +13,8 @@ from ..messages import (
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
+    PRIVACY_POLICY_RESPONSE,
+    REFERRAL_BALANCE_RESPONSE,
     REFERRAL_INFO_RESPONSE,
     REFERRAL_STATS_RESPONSE,
     SUPPORT_BUTTON_TEXT,
@@ -156,6 +158,11 @@ def action_connect_help() -> str:
     return HELP_INSTRUCTION
 
 
+def action_privacy_policy() -> str:
+    """Ответ про персональные данные и конфиденциальность."""
+    return PRIVACY_POLICY_RESPONSE
+
+
 def action_referral_info() -> Tuple[str, InlineKeyboardMarkup]:
     """Ответ на вопросы про реферальную программу; кнопка «Пригласить друга»."""
     kb = InlineKeyboardMarkup(
@@ -167,13 +174,23 @@ def action_referral_info() -> Tuple[str, InlineKeyboardMarkup]:
 
 
 def action_referral_stats() -> Tuple[str, InlineKeyboardMarkup]:
-    """Ответ на вопросы про баллы/бонусные дни; кнопка «Пригласить друга»."""
+    """Ответ на вопросы про статистику рефералов (сколько подключились/оплатили); кнопка «Пригласить друга»."""
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref:open_from_notify")],
         ]
     )
     return REFERRAL_STATS_RESPONSE, kb
+
+
+def action_referral_balance() -> Tuple[str, InlineKeyboardMarkup]:
+    """Ответ на вопросы про баланс баллов/бонусных дней; кнопка «Пригласить друга»."""
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="ref:open_from_notify")],
+        ]
+    )
+    return REFERRAL_BALANCE_RESPONSE, kb
 
 
 def action_smalltalk() -> str:

@@ -1,8 +1,8 @@
 """
 Классификация намерений пользователя (rule-based MVP).
 Порядок: human_request → missing_config_after_payment → resend_config →
-vpn_not_working → referral_info → referral_stats → connect_help → subscription_status →
-handshake_status → smalltalk → unclear.
+vpn_not_working → privacy_policy → referral_stats → referral_balance → referral_info →
+connect_help → subscription_status → handshake_status → smalltalk → unclear.
 """
 import re
 from typing import Dict, Any
@@ -42,19 +42,35 @@ VPN_NOT_WORKING_PATTERNS = [
     r"включил vpn но ничего не открывается",
     r"vpn подключился но интернет не работает",
 ]
-REFERRAL_PATTERNS = [
-    r"реферал", r"рефераль", r"реферальная программа", r"пригласить друга",
-    r"моя ссылка", r"реферальная ссылка", r"как пригласить друга",
-    r"как поделиться ссылкой", r"сколько рефералов", r"сколько друзей",
-    r"рефералы", r"рефералов", r"приглашения",
-    r"бонусные дни", r"пригласил друга",
+PRIVACY_POLICY_PATTERNS = [
+    r"персональные данные",
+    r"что с моими данными",
+    r"храните ли данные",
+    r"конфиденциальность",
+    r"privacy",
+    r"данные пользователя",
 ]
 REFERRAL_STATS_PATTERNS = [
+    r"сколько рефералов",
+    r"сколько друзей подключилось",
+    r"сколько друзей оплатили",
+    r"сколько рефералов оплатили",
+    r"сколько подключились",
+]
+REFERRAL_BALANCE_PATTERNS = [
     r"сколько баллов",
-    r"сколько бонус",
+    r"сколько бонусов",
+    r"мой баланс",
+    r"бонусные дни",
     r"сколько бонусных дней",
-    r"сколько у меня бонус",
-    r"мой баланс бонус",
+]
+# Только приглашение / как пригласить (без статистики и баланса)
+REFERRAL_PATTERNS = [
+    r"реферальная программа",
+    r"как работает рефералка",
+    r"как пригласить друга",
+    r"реферальная ссылка",
+    r"пригласить друга",
 ]
 CONNECT_HELP_PATTERNS = [
     r"как подключить vpn", r"как подключиться\b", r"помоги подключить",
@@ -118,27 +134,35 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if _match_patterns(t, VPN_NOT_WORKING_PATTERNS):
         return IntentResult(intent="vpn_not_working", confidence=0.8)
 
-    # 5. referral_info (до connect_help, чтобы «рефералов подключились» не попал в connect_help)
-    if _match_patterns(t, REFERRAL_PATTERNS):
-        return IntentResult(intent="referral_info", confidence=0.85)
+    # 5. privacy_policy
+    if _match_patterns(t, PRIVACY_POLICY_PATTERNS):
+        return IntentResult(intent="privacy_policy", confidence=0.85)
 
-    # 6. referral_stats (баллы, бонусные дни — до connect_help)
+    # 6. referral_stats (сколько рефералов/друзей подключились/оплатили)
     if _match_patterns(t, REFERRAL_STATS_PATTERNS):
         return IntentResult(intent="referral_stats", confidence=0.85)
 
-    # 7. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
+    # 7. referral_balance (баллы, бонусы, баланс)
+    if _match_patterns(t, REFERRAL_BALANCE_PATTERNS):
+        return IntentResult(intent="referral_balance", confidence=0.85)
+
+    # 8. referral_info (только приглашение: как пригласить, ссылка)
+    if _match_patterns(t, REFERRAL_PATTERNS):
+        return IntentResult(intent="referral_info", confidence=0.85)
+
+    # 9. connect_help (узкие паттерны: без голого «подключ», чтобы не ловить «подключились»)
     if _match_patterns(t, CONNECT_HELP_PATTERNS):
         return IntentResult(intent="connect_help", confidence=0.85)
 
-    # 8. subscription_status
+    # 10. subscription_status
     if _match_patterns(t, STATUS_PATTERNS):
         return IntentResult(intent="subscription_status", confidence=0.85)
 
-    # 9. handshake_status
+    # 11. handshake_status
     if _match_patterns(t, HANDSHAKE_PATTERNS):
         return IntentResult(intent="handshake_status", confidence=0.8)
 
-    # 10. smalltalk
+    # 12. smalltalk
     short = t.lower().strip()
     if short in SMALLTALK_PHRASES:
         return IntentResult(intent="smalltalk", confidence=0.7)
