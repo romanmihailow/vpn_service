@@ -118,9 +118,10 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
         txt, km = action_human_request()
         return txt, km, meta
 
-    # Guardrails
+    # Guardrails: для известных интентов с низкой уверенностью — fallback.
+    # Для unclear не возвращаемся здесь: идём в блок else → OpenAI + FAQ, затем fallback при ошибке.
     can_handle, fallback_text = should_handle_directly(result.intent, result.confidence)
-    if not can_handle and fallback_text:
+    if not can_handle and fallback_text and result.intent != "unclear":
         meta["fallback"] = True
         if should_handoff_to_human(result.intent, result.confidence):
             meta["handoff_to_human"] = True
