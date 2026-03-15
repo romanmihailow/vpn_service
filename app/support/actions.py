@@ -78,6 +78,7 @@ async def action_resend_config(
         telegram_user_id=telegram_user_id,
         config_text=config_text,
         caption="Повторная отправка конфига MaxNet VPN. Файл vpn.conf — в этом сообщении. QR-код — в следующем.",
+        schedule_checkpoint=False,
     )
     RESEND_COOLDOWN[telegram_user_id] = now
     return (

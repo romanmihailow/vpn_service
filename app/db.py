@@ -1768,6 +1768,32 @@ def has_subscription_notification(
             return row is not None
 
 
+def get_pending_config_checkpoints(interval_seconds: int = 180) -> List[Dict[str, Any]]:
+    """
+    Подписки, для которых зарегистрирован post-config checkpoint (config_checkpoint_pending),
+    прошло не менее interval_seconds с момента выдачи конфига (sent_at),
+    и checkpoint ещё не отправлялся (нет config_checkpoint_sent).
+    Возвращает список dict с ключами subscription_id, telegram_user_id.
+    """
+    sql = """
+    SELECT n.subscription_id, n.telegram_user_id
+    FROM subscription_notifications n
+    WHERE n.notification_type = 'config_checkpoint_pending'
+      AND n.sent_at < NOW() - INTERVAL '1 second' * %s
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications s
+        WHERE s.subscription_id = n.subscription_id
+          AND s.notification_type = 'config_checkpoint_sent'
+      )
+    ORDER BY n.sent_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (interval_seconds,))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 def get_subscriptions_for_welcome_after_first_payment() -> List[Dict[str, Any]]:
     """
     Подписки с оплатой через ЮKassa или Heleket (без баллов),

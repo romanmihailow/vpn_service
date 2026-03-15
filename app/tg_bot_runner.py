@@ -24,8 +24,12 @@ from . import db
 from .bot import (
     send_vpn_config_to_user,
     send_subscription_expired_notification,
+    send_config_checkpoint_message,
 )
 from .messages import (
+    CONFIG_CHECK_FAIL,
+    CONFIG_CHECK_OPTIONS,
+    CONFIG_CHECK_SUCCESS,
     HELP_INSTRUCTION,
     REF_LINK_WELCOME_TEXT,
     REF_TRIAL_BUTTON_TEXT,
@@ -45,6 +49,12 @@ from .promo_codes import (
     build_insert_sql_for_postgres,
 )
 from .support.router import support_router
+from .support.context_builder import build_user_context
+from .support.actions import (
+    action_connect_help,
+    action_human_request,
+    action_vpn_not_working,
+)
 
 log = get_logger()
 promo_log = get_promo_logger()
@@ -3111,6 +3121,7 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
             telegram_user_id=chat_id,
             config_text=config_text,
             caption="Повторная отправка конфига MaxNet VPN.\n\nФайл vpn.conf — в этом сообщении. QR-код — в следующем.",
+            schedule_checkpoint=False,
         )
         log.info(
             "[ConfigResend] Config sent to chat_id=%s sub_id=%s ip=%s",
@@ -3129,6 +3140,175 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
             "Не удалось отправить настройки. Попробуй позже или обратись в поддержку.",
             show_alert=True,
         )
+
+
+# ---- Post-config connection check (checkpoint) callbacks ----
+
+@router.callback_query(F.data.startswith("config_check_ok:"))
+async def config_check_ok_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Да, всё работает» после checkpoint."""
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or (callback.from_user and sub.get("telegram_user_id") != callback.from_user.id):
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(CONFIG_CHECK_SUCCESS)
+    try:
+        db.create_subscription_notification(
+            subscription_id=sub_id,
+            notification_type="config_check_ok",
+            telegram_user_id=sub.get("telegram_user_id"),
+            expires_at=sub.get("expires_at"),
+        )
+    except Exception as e:
+        log.warning("[ConfigCheck] Failed to record config_check_ok sub_id=%s: %r", sub_id, e)
+
+
+@router.callback_query(F.data.startswith("config_check_failed:"))
+async def config_check_failed_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Нет, не получилось» — показываем варианты."""
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or (callback.from_user and sub.get("telegram_user_id") != callback.from_user.id):
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    await callback.answer()
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text=CONFIG_CHECK_OPTIONS["not_found"],
+                callback_data=f"config_issue_not_found:{sub_id}",
+            )],
+            [InlineKeyboardButton(
+                text=CONFIG_CHECK_OPTIONS["import"],
+                callback_data=f"config_issue_import:{sub_id}",
+            )],
+            [InlineKeyboardButton(
+                text=CONFIG_CHECK_OPTIONS["connected_no_internet"],
+                callback_data=f"config_issue_connected_no_internet:{sub_id}",
+            )],
+            [InlineKeyboardButton(
+                text=CONFIG_CHECK_OPTIONS["support"],
+                callback_data="config_issue_support",
+            )],
+        ]
+    )
+    await callback.message.answer(CONFIG_CHECK_FAIL, reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("config_check_resend:"))
+async def config_check_resend_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Отправить настройки ещё раз» — повторная отправка конфига."""
+    if callback.from_user is None or callback.message is None or callback.message.chat is None:
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    chat_id = callback.message.chat.id
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or sub.get("telegram_user_id") != chat_id:
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    if not sub.get("active") or not sub.get("vpn_ip") or not sub.get("wg_private_key"):
+        await callback.answer("Конфиг недоступен. Обратись в поддержку.", show_alert=True)
+        return
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    config_text = wg.build_client_config(
+        client_private_key=sub["wg_private_key"],
+        client_ip=sub["vpn_ip"],
+    )
+    await send_vpn_config_to_user(
+        telegram_user_id=chat_id,
+        config_text=config_text,
+        caption="Повторная отправка конфига MaxNet VPN.\n\nФайл vpn.conf — в этом сообщении. QR-код — в следующем.",
+        schedule_checkpoint=False,
+    )
+    await callback.message.answer("Конфиг отправлен. Проверь сообщения выше.")
+
+
+@router.callback_query(F.data.startswith("config_issue_not_found:"))
+async def config_issue_not_found_callback(callback: CallbackQuery) -> None:
+    """Не нашёл конфиг — предлагаем отправить ещё раз."""
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or (callback.from_user and sub.get("telegram_user_id") != callback.from_user.id):
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    await callback.answer()
+    resend_btn = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📱 Отправить настройки ещё раз",
+                callback_data=f"config_check_resend:{sub_id}",
+            )],
+        ]
+    )
+    await callback.message.answer(
+        "Напиши мне «вышли конфиг» или нажми кнопку ниже — отправлю настройки ещё раз.",
+        reply_markup=resend_btn,
+    )
+
+
+@router.callback_query(F.data.startswith("config_issue_import:"))
+async def config_issue_import_callback(callback: CallbackQuery) -> None:
+    """Не получается импортировать — инструкция по подключению."""
+    await callback.answer()
+    await callback.message.answer(
+        HELP_INSTRUCTION,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
+@router.callback_query(F.data.startswith("config_issue_connected_no_internet:"))
+async def config_issue_connected_no_internet_callback(callback: CallbackQuery) -> None:
+    """VPN подключён, но сайты не открываются — troubleshooting (vpn_not_working)."""
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or (callback.from_user and sub.get("telegram_user_id") != callback.from_user.id):
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    await callback.answer()
+    user_id = callback.from_user.id if callback.from_user else 0
+    context = build_user_context(user_id)
+    text, reply_markup, _ = action_vpn_not_working(context)
+    await callback.message.answer(text, reply_markup=reply_markup)
+
+
+@router.callback_query(F.data == "config_issue_support")
+async def config_issue_support_callback(callback: CallbackQuery) -> None:
+    """Нужна помощь — human handoff."""
+    await callback.answer()
+    text, reply_markup = action_human_request()
+    await callback.message.answer(text, reply_markup=reply_markup)
 
 
 @router.message(Command("ref_info"))
@@ -6750,6 +6930,90 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER)
 
 
+CONFIG_CHECKPOINT_DELAY_SEC = 180
+CONFIG_CHECKPOINT_JOB_INTERVAL_SEC = 60
+
+
+async def auto_config_checkpoint(bot: Bot) -> None:
+    """
+    Background job: периодически проверяет подписки с config_checkpoint_pending,
+    у которых прошло >= CONFIG_CHECKPOINT_DELAY_SEC с момента выдачи конфига.
+    Если handshake ещё нет — отправляет сообщение «Удалось подключиться к VPN?».
+    Устойчив к рестарту процесса: состояние хранится в subscription_notifications.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_CONFIG_CHECKPOINT):
+        log.info("[ConfigCheckpoint] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                candidates = db.get_pending_config_checkpoints(
+                    interval_seconds=CONFIG_CHECKPOINT_DELAY_SEC,
+                )
+                if not candidates:
+                    await asyncio.sleep(CONFIG_CHECKPOINT_JOB_INTERVAL_SEC)
+                    continue
+
+                if hasattr(asyncio, "to_thread"):
+                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                else:
+                    loop = asyncio.get_running_loop()
+                    handshakes = await loop.run_in_executor(
+                        None, wg.get_handshake_timestamps
+                    )
+
+                for row in candidates:
+                    sub_id = row.get("subscription_id")
+                    tg_id = row.get("telegram_user_id")
+                    if not sub_id or not tg_id:
+                        continue
+                    try:
+                        sub = db.get_subscription_by_id(sub_id)
+                        if not sub or not sub.get("active"):
+                            continue
+                        pub_key = (sub.get("wg_public_key") or "").strip()
+                        if not pub_key:
+                            continue
+                        if handshakes.get(pub_key, 0) > 0:
+                            continue
+                        if hasattr(asyncio, "to_thread"):
+                            handshakes_refresh = await asyncio.to_thread(
+                                wg.get_handshake_timestamps
+                            )
+                        else:
+                            handshakes_refresh = await asyncio.get_running_loop().run_in_executor(
+                                None, wg.get_handshake_timestamps
+                            )
+                        if handshakes_refresh.get(pub_key, 0) > 0:
+                            continue
+                        await send_config_checkpoint_message(
+                            telegram_user_id=tg_id,
+                            subscription_id=sub_id,
+                        )
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="config_checkpoint_sent",
+                            telegram_user_id=tg_id,
+                            expires_at=sub.get("expires_at"),
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "[ConfigCheckpoint] Failed for sub_id=%s tg_id=%s: %r",
+                            sub_id,
+                            tg_id,
+                            e,
+                        )
+                    await asyncio.sleep(1)
+
+                await asyncio.sleep(CONFIG_CHECKPOINT_JOB_INTERVAL_SEC)
+            except Exception as e:
+                log.error("[ConfigCheckpoint] Unexpected error in loop: %r", e)
+                await asyncio.sleep(CONFIG_CHECKPOINT_JOB_INTERVAL_SEC)
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_CONFIG_CHECKPOINT)
+
+
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
@@ -6791,6 +7055,7 @@ async def main() -> None:
     asyncio.create_task(auto_handshake_followup_notifications(bot))
     asyncio.create_task(auto_welcome_after_first_payment(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
+    asyncio.create_task(auto_config_checkpoint(bot))
 
     app = create_app()
     runner = web.AppRunner(app)

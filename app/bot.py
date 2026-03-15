@@ -10,6 +10,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton, InlineKeyboar
 from .config import settings
 from .format_admin import fmt_date
 from .messages import (
+    CONFIG_CHECK_MESSAGE,
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
@@ -19,9 +20,12 @@ from .messages import (
 )
 import qrcode
 
+from . import db
+
 log = logging.getLogger(__name__)
 
 CONFIG_SEND_DELAY_SEC = 0.7
+CONFIG_CHECKPOINT_DELAY_SEC = 180
 
 
 def generate_qr_image_bytes(config_text: str) -> bytes:
@@ -39,10 +43,63 @@ def generate_qr_image_bytes(config_text: str) -> bytes:
     return buffer.read()
 
 
+def _make_config_checkpoint_keyboard(subscription_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для сообщения «Удалось подключиться к VPN?»."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, всё работает",
+                    callback_data=f"config_check_ok:{subscription_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Нет, не получилось",
+                    callback_data=f"config_check_failed:{subscription_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📱 Отправить настройки ещё раз",
+                    callback_data=f"config_check_resend:{subscription_id}",
+                ),
+            ],
+        ]
+    )
+
+
+async def send_config_checkpoint_message(
+    telegram_user_id: int,
+    subscription_id: int,
+) -> None:
+    """
+    Отправляет пользователю сообщение «Удалось подключиться к VPN?» с кнопками.
+    Вызывается из background job после проверки handshake.
+    Запись config_checkpoint_sent выполняет вызывающий код после успешной отправки.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        keyboard = _make_config_checkpoint_keyboard(subscription_id)
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=CONFIG_CHECK_MESSAGE,
+            reply_markup=keyboard,
+        )
+        log.info(
+            "[ConfigCheckpoint] Sent checkpoint to tg_id=%s sub_id=%s",
+            telegram_user_id,
+            subscription_id,
+        )
+    finally:
+        await bot.session.close()
+
+
 async def send_vpn_config_to_user(
     telegram_user_id: int,
     config_text: str,
     caption: Optional[str] = None,
+    schedule_checkpoint: bool = True,
 ) -> None:
     """
     Отправляем пользователю:
@@ -51,6 +108,8 @@ async def send_vpn_config_to_user(
     3) короткую инструкцию
 
     Между сообщениями задержка ~0.7 сек для последовательного чтения.
+    Если schedule_checkpoint=True (по умолчанию), через ~3 мин отправляется
+    проверка «Удалось подключиться к VPN?» при отсутствии handshake.
     """
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
 
@@ -95,6 +154,28 @@ async def send_vpn_config_to_user(
             reply_markup=support_keyboard,
         )
         log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
+
+        if schedule_checkpoint:
+            try:
+                sub = db.get_latest_subscription_for_telegram(telegram_user_id)
+                if sub and sub.get("id"):
+                    db.create_subscription_notification(
+                        subscription_id=sub["id"],
+                        notification_type="config_checkpoint_pending",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=sub.get("expires_at"),
+                    )
+                    log.debug(
+                        "[SendConfig] Registered config_checkpoint_pending for tg_id=%s sub_id=%s",
+                        telegram_user_id,
+                        sub["id"],
+                    )
+            except Exception as e:
+                log.warning(
+                    "[SendConfig] Failed to register checkpoint for tg_id=%s: %r",
+                    telegram_user_id,
+                    e,
+                )
 
     except Exception as e:
         log.error(

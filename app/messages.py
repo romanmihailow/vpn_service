@@ -73,6 +73,23 @@ SUPPORT_AFTER_ACTIVATION_HINT = (
     "— статус подписки"
 )
 
+# === Post-config connection check (checkpoint) ===
+CONFIG_CHECK_MESSAGE = "Удалось подключиться к VPN?"
+
+CONFIG_CHECK_SUCCESS = (
+    "Отлично 👌\n\n"
+    "Если что-то понадобится позже — просто напишите мне."
+)
+
+CONFIG_CHECK_FAIL = "Понял. Что именно не получилось?"
+
+CONFIG_CHECK_OPTIONS = {
+    "not_found": "Не нашёл конфиг",
+    "import": "Не получается импортировать",
+    "connected_no_internet": "VPN подключён, но сайты не открываются",
+    "support": "Нужна помощь",
+}
+
 # === /help — короткая инструкция без привязки к «я отправил» ===
 HELP_INSTRUCTION = (
     "📱 Подключение к VPN:\n\n"
