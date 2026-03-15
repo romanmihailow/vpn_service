@@ -11,6 +11,7 @@ from .config import settings
 from .format_admin import fmt_date
 from .messages import (
     CONFIG_CHECK_MESSAGE,
+    CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
@@ -139,25 +140,44 @@ async def send_vpn_config_to_user(
         log.info("[SendConfig] QR photo sent to tg_id=%s", telegram_user_id)
         await asyncio.sleep(CONFIG_SEND_DELAY_SEC)
 
-        # 3. Короткая инструкция + кнопка помощи (открывает чат поддержки)
-        support_keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
-            ]
-        )
+        # 3. Короткая инструкция + кнопки (проверить подключение, нужна помощь)
+        sub = None
+        try:
+            sub = db.get_latest_subscription_for_telegram(telegram_user_id)
+        except Exception:
+            pass
+        if sub and sub.get("id"):
+            instruction_keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=CONFIG_CHECK_NOW_BUTTON_TEXT,
+                            callback_data=f"config_check_now:{sub['id']}",
+                        ),
+                    ],
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+                ]
+            )
+        else:
+            instruction_keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+                ]
+            )
         instruction_with_hint = CONNECTION_INSTRUCTION_SHORT + "\n\n" + SUPPORT_AFTER_CONFIG_HINT
         await bot.send_message(
             chat_id=telegram_user_id,
             text=instruction_with_hint,
             parse_mode=None,
             disable_web_page_preview=True,
-            reply_markup=support_keyboard,
+            reply_markup=instruction_keyboard,
         )
         log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
 
         if schedule_checkpoint:
             try:
-                sub = db.get_latest_subscription_for_telegram(telegram_user_id)
+                if not sub:
+                    sub = db.get_latest_subscription_for_telegram(telegram_user_id)
                 if sub and sub.get("id"):
                     db.create_subscription_notification(
                         subscription_id=sub["id"],

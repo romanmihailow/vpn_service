@@ -28,6 +28,9 @@ from .bot import (
 )
 from .messages import (
     CONFIG_CHECK_FAIL,
+    CONFIG_CHECK_NOW_FAIL,
+    CONFIG_CHECK_NOW_OK,
+    CONFIG_CHECK_NOW_UNKNOWN,
     CONFIG_CHECK_OPTIONS,
     CONFIG_CHECK_SUCCESS,
     HELP_INSTRUCTION,
@@ -3143,6 +3146,47 @@ async def config_resend_callback(callback: CallbackQuery) -> None:
 
 
 # ---- Post-config connection check (checkpoint) callbacks ----
+
+@router.callback_query(F.data.startswith("config_check_now:"))
+async def config_check_now_callback(callback: CallbackQuery) -> None:
+    """Кнопка «Проверить подключение» после выдачи конфига — быстрая проверка handshake."""
+    if callback.from_user is None or callback.message is None:
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    try:
+        sub_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Ошибка.", show_alert=True)
+        return
+    sub = db.get_subscription_by_id(sub_id)
+    if not sub or sub.get("telegram_user_id") != callback.from_user.id:
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+    await callback.answer()
+    pub_key = (sub.get("wg_public_key") or "").strip()
+    if not pub_key:
+        log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=unknown (no wg_public_key)", callback.from_user.id, sub_id)
+        await callback.message.answer(CONFIG_CHECK_NOW_UNKNOWN)
+        return
+    try:
+        handshakes = wg.get_handshake_timestamps()
+        ts = handshakes.get(pub_key, 0)
+    except Exception as e:
+        log.warning("[ConfigCheckNow] tg_id=%s sub_id=%s handshake check failed: %r", callback.from_user.id, sub_id, e)
+        await callback.message.answer(CONFIG_CHECK_NOW_UNKNOWN)
+        return
+    if ts > 0:
+        log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=ok", callback.from_user.id, sub_id)
+        await callback.message.answer(CONFIG_CHECK_NOW_OK)
+    else:
+        log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=no_handshake", callback.from_user.id, sub_id)
+        support_kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+            ]
+        )
+        await callback.message.answer(CONFIG_CHECK_NOW_FAIL, reply_markup=support_kb)
+
 
 @router.callback_query(F.data.startswith("config_check_ok:"))
 async def config_check_ok_callback(callback: CallbackQuery) -> None:
