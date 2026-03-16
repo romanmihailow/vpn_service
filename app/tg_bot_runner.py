@@ -4253,6 +4253,10 @@ async def cmd_crm_report(message: Message) -> None:
     handshake_count = r["handshake_user_connected"]
     conversion_pct = (handshake_count * 100 // payments_count) if payments_count > 0 else 0
 
+    surveys_sent = r.get("no_handshake_survey", 0)
+    answers_total = r.get("no_handshake_survey_answers_total", 0)
+    response_rate = round(answers_total / surveys_sent * 100) if surveys_sent > 0 else 0
+
     vpn_ok_pct = ""
     if r["handshake_followup_10m"] > 0:
         vpn_ok_pct = f" ({100 * r['vpn_ok_clicked'] // r['handshake_followup_10m']}%)"
@@ -4279,7 +4283,9 @@ async def cmd_crm_report(message: Message) -> None:
         f"• напоминание через 2 часа: {r['no_handshake_2h']}\n"
         f"• напоминание через 24 часа: {r['no_handshake_24h']}\n"
         f"• напоминание через 5 дней: {r['no_handshake_5d']}\n"
-        f"• опрос причины отказа: {r['no_handshake_survey']}\n\n"
+        f"• опрос причины отказа: {r['no_handshake_survey']}\n"
+        f"• ответили на опрос: {answers_total}\n"
+        f"• response rate: {response_rate}%\n\n"
         "<b>Причины отказа:</b>\n"
         f"• не разобрался с настройкой: {r.get('no_handshake_survey_answer_1', 0)}\n"
         f"• пока не нужен: {r.get('no_handshake_survey_answer_2', 0)}\n"

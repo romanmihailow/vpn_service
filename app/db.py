@@ -1387,6 +1387,12 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
                 result["no_handshake_survey_answer_2"] = int(row[13] or 0)
                 result["no_handshake_survey_answer_3"] = int(row[14] or 0)
                 result["no_handshake_survey_answer_4"] = int(row[15] or 0)
+            result["no_handshake_survey_answers_total"] = (
+                result.get("no_handshake_survey_answer_1", 0)
+                + result.get("no_handshake_survey_answer_2", 0)
+                + result.get("no_handshake_survey_answer_3", 0)
+                + result.get("no_handshake_survey_answer_4", 0)
+            )
 
             cur.execute(
                 """

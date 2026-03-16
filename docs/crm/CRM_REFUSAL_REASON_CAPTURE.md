@@ -45,10 +45,21 @@
 
 ---
 
-## 4. Как отображаются причины в /crm_report
+## 4. Survey response rate
+
+**survey_response_rate** = число ответов на опрос / число отправленных опросов.
+
+- В отчёте считаются: **no_handshake_survey** (опросов отправлено) и **no_handshake_survey_answers_total** (ответ_1 + ответ_2 + ответ_3 + ответ_4).
+- **response rate** = `round(answers_total / surveys_sent * 100)` при `surveys_sent > 0`, иначе 0.
+- В блоке «Воронка без handshake» выводятся: **• ответили на опрос: X** и **• response rate: Y%**.
+
+---
+
+## 5. Как отображаются причины в /crm_report
 
 - В отчёте по-прежнему выводится строка:  
   **• опрос причины отказа: N** (число отправленных опросов за период).
+- Сразу под ней: **• ответили на опрос: X**, **• response rate: Y%**.
 - Ниже добавлен блок **«Причины отказа»** за тот же период (то же окно по `sent_at` в `subscription_notifications`):
   - не разобрался с настройкой: N  
   - пока не нужен: N  
@@ -59,7 +70,7 @@
 
 ---
 
-## 5. Пример вывода /crm_report
+## 6. Пример вывода /crm_report
 
 ```
 CRM-отчёт за 7 дней
@@ -86,6 +97,8 @@ CRM-отчёт за 7 дней
 • напоминание через 24 часа: 69
 • напоминание через 5 дней: 81
 • опрос причины отказа: 21
+• ответили на опрос: 14
+• response rate: 67%
 
 Причины отказа:
 • не разобрался с настройкой: 5
@@ -103,13 +116,17 @@ CRM-отчёт за 7 дней
 
 | Файл | Изменения |
 |------|-----------|
-| `app/db.py` | `get_eligible_subscription_for_survey_answer()`, `user_has_any_survey_answer()`, в `get_crm_funnel_report()` — учёт `no_handshake_survey_answer_1` … `no_handshake_survey_answer_4`. |
+| `app/db.py` | `get_eligible_subscription_for_survey_answer()`, `user_has_any_survey_answer()`, в `get_crm_funnel_report()` — учёт ответов и `no_handshake_survey_answers_total` для response rate. |
 | `app/messages.py` | Константы подтверждения и «ответ уже сохранён». |
 | `app/support/service.py` | `_normalize_survey_answer()`, `try_record_survey_answer()`; в начале `process_support_message()` — попытка сохранить ответ и при успехе вернуть текст подтверждения. |
-| `app/tg_bot_runner.py` | В вывод `/crm_report` добавлен блок «Причины отказа» с четырьмя счётчиками. |
+| `app/tg_bot_runner.py` | В вывод `/crm_report` добавлен блок «Причины отказа», строки «ответили на опрос» и «response rate: Y%». |
 
 Платежи, реферальная логика, AI-support, checkpoint и выдача WireGuard не менялись.
 
 ---
 
 Refusal reason capture implemented.
+
+---
+
+Survey response rate metric implemented.
