@@ -2848,7 +2848,7 @@ async def vpn_ok_callback(callback: CallbackQuery) -> None:
     buy_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="pay:open")],
-            [InlineKeyboardButton(text="🤝 Получить ссылку", callback_data="ref:open_from_notify")],
+            [InlineKeyboardButton(text="🤝 Получить ссылку", callback_data=f"ref:open_from_notify:{sub_id}")],
         ]
     )
     await callback.message.answer(
@@ -2953,7 +2953,7 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
     telegram_user_id = user.id
     username = user.username
 
-    # Tracking ref_nudge_clicked для CRM referral nudge (callback_data с sub_id)
+    # Tracking ref_nudge_clicked для CRM (callback с sub_id или fallback по последней подписке)
     data = callback.data or ""
     if data.startswith("ref:open_from_notify:"):
         parts = data.split(":", 2)
@@ -2978,6 +2978,21 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
                             )
             except (ValueError, TypeError):
                 pass
+    else:
+        # Fallback: callback без sub_id — берём последнюю активную подписку пользователя
+        try:
+            sub = db.get_latest_subscription_for_telegram(telegram_user_id)
+            if sub:
+                sub_id = sub.get("id")
+                if sub_id and not db.has_subscription_notification(sub_id, "ref_nudge_clicked"):
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="ref_nudge_clicked",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=sub.get("expires_at"),
+                    )
+        except Exception as e:
+            log.warning("[Referral] Failed to record ref_nudge_clicked (fallback) tg_id=%s: %r", telegram_user_id, e)
 
     try:
         info = db.get_or_create_referral_info(
