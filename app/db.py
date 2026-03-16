@@ -1856,6 +1856,29 @@ def has_subscription_notification(
             return row is not None
 
 
+def has_recently_expired_subscription(
+    telegram_user_id: int,
+    within_hours: int = 48,
+) -> bool:
+    """
+    Есть ли у пользователя недавно истекшая подписка (active=FALSE, expires_at в прошлом,
+    но не более within_hours назад). Для UX-патча «trial expired → paid».
+    """
+    sql = """
+    SELECT 1
+    FROM vpn_subscriptions
+    WHERE telegram_user_id = %s
+      AND active = FALSE
+      AND expires_at < NOW()
+      AND expires_at >= NOW() - INTERVAL '1 hour' * %s
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id, within_hours))
+            return cur.fetchone() is not None
+
+
 def get_pending_config_checkpoints(interval_seconds: int = 180) -> List[Dict[str, Any]]:
     """
     Подписки, для которых зарегистрирован post-config checkpoint (config_checkpoint_pending),
@@ -1872,6 +1895,33 @@ def get_pending_config_checkpoints(interval_seconds: int = 180) -> List[Dict[str
         SELECT 1 FROM subscription_notifications s
         WHERE s.subscription_id = n.subscription_id
           AND s.notification_type = 'config_checkpoint_sent'
+      )
+    ORDER BY n.sent_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (interval_seconds,))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+def get_pending_recently_expired_trial_followups(
+    interval_seconds: int = 180,
+) -> List[Dict[str, Any]]:
+    """
+    Подписки, для которых зарегистрирован follow-up после «trial expired → paid»
+    (recently_expired_trial_followup), прошло не менее interval_seconds,
+    и follow-up ещё не отправлялся (нет recently_expired_trial_followup_sent).
+    """
+    sql = """
+    SELECT n.subscription_id, n.telegram_user_id
+    FROM subscription_notifications n
+    WHERE n.notification_type = 'recently_expired_trial_followup'
+      AND n.sent_at < NOW() - INTERVAL '1 second' * %s
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications s
+        WHERE s.subscription_id = n.subscription_id
+          AND s.notification_type = 'recently_expired_trial_followup_sent'
       )
     ORDER BY n.sent_at ASC;
     """

@@ -8,6 +8,10 @@ CONF_HIGH = 0.8
 CONF_MED = 0.5
 CONF_LOW = 0.3
 
+# Intents, которые обрабатываем при confidence >= 0.7 (не требуют CONF_HIGH)
+ALLOWED_MEDIUM_INTENTS = frozenset({"smalltalk", "subscription_status"})
+CONF_MEDIUM = 0.7
+
 
 def get_safe_fallback() -> str:
     """Безопасный ответ при низкой уверенности."""
@@ -41,6 +45,9 @@ def should_handle_directly(intent: str, confidence: float) -> Tuple[bool, Option
     """
     if intent == "human_request":
         return False, None  # специальная обработка — human handoff
+
+    if intent in ALLOWED_MEDIUM_INTENTS and confidence >= CONF_MEDIUM:
+        return True, None
 
     if confidence >= CONF_HIGH:
         return True, None

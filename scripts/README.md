@@ -38,6 +38,31 @@ python3 scripts/diagnose_handshake_notification.py
 
 ---
 
+## delete_user_for_test.py
+
+**Назначение:** полностью удалить пользователя из БД для повторного тестирования (например, реферальной ссылки, триала, промокода).
+
+**Когда запускать:** нужно зайти с нуля по реф-ссылке / промокоду и протестировать весь флоу.
+
+**Что удаляет:**
+- Подписки: peer из WireGuard, IP в пул, запись в `vpn_subscriptions`
+- `referrals` (реферальные связи)
+- `promo_code_usages`, `user_points_transactions`, `user_points`, `user_profiles`
+
+**Запуск:**
+```bash
+.venv/bin/python scripts/delete_user_for_test.py <telegram_user_id>
+```
+
+**Пример:**
+```bash
+.venv/bin/python scripts/delete_user_for_test.py 7997651640
+```
+
+**Требования:** доступ к БД и WireGuard, виртуальное окружение (`.venv`).
+
+---
+
 ## fix_duplicate_ips.py
 
 **Назначение:** устранение дублей IP и применение UNIQUE constraint.

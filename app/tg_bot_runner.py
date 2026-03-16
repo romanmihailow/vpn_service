@@ -25,6 +25,7 @@ from .bot import (
     send_vpn_config_to_user,
     send_subscription_expired_notification,
     send_config_checkpoint_message,
+    send_trial_expired_paid_notification,
 )
 from .messages import (
     CONFIG_CHECK_FAIL,
@@ -55,6 +56,7 @@ from .messages import (
     SUPPORT_BUTTON_TEXT,
     SUPPORT_DISCOVERY_TEXT,
     SUPPORT_URL,
+    TRIAL_EXPIRED_PAID_FOLLOWUP_NO_HANDSHAKE_TEXT,
     TARIFFS_UNAVAILABLE,
     WG_APP_STORE_URL,
     WG_DESKTOP_URL,
@@ -2434,6 +2436,18 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
             )
 
         if send_config:
+            recently_expired_trial = db.has_recently_expired_subscription(
+                telegram_user_id, within_hours=48
+            )
+            if recently_expired_trial:
+                try:
+                    await send_trial_expired_paid_notification(telegram_user_id)
+                except Exception as e:
+                    log.warning(
+                        "[PointsPay] Failed to send trial-expired-paid notification tg_id=%s: %r",
+                        telegram_user_id,
+                        e,
+                    )
             config_text = wg.build_client_config(
                 client_private_key=client_priv,
                 client_ip=client_ip,
@@ -2447,6 +2461,20 @@ async def points_tariff_callback(callback: CallbackQuery) -> None:
                     "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                 ),
             )
+            if recently_expired_trial:
+                try:
+                    db.create_subscription_notification(
+                        subscription_id=sub_id,
+                        notification_type="recently_expired_trial_followup",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "[PointsPay] Failed to register recently_expired_trial_followup sub_id=%s: %r",
+                        sub_id,
+                        e,
+                    )
         else:
             log.info(
                 "[PointsPay] Reused existing config for tg_id=%s sub_id=%s (no new config sent)",
@@ -3960,6 +3988,18 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                         )
 
                 if send_config:
+                    recently_expired_trial = db.has_recently_expired_subscription(
+                        user.id, within_hours=48
+                    )
+                    if recently_expired_trial:
+                        try:
+                            await send_trial_expired_paid_notification(user.id)
+                        except Exception as e:
+                            log.warning(
+                                "[PromoApply] Failed to send trial-expired-paid notification tg_id=%s: %r",
+                                user.id,
+                                e,
+                            )
                     config_text = wg.build_client_config(
                         client_private_key=client_priv,
                         client_ip=client_ip,
@@ -3973,6 +4013,20 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
                             "Файл vpn.conf — в этом сообщении. QR-код — в следующем."
                         ),
                     )
+                    if recently_expired_trial:
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=new_sub_id,
+                                notification_type="recently_expired_trial_followup",
+                                telegram_user_id=user.id,
+                                expires_at=expires_at,
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "[PromoApply] Failed to register recently_expired_trial_followup sub_id=%s: %r",
+                                new_sub_id,
+                                e,
+                            )
                 else:
                     log.info(
                         "[PromoApply] Reused existing config for tg_id=%s sub_id=%s (no new config sent)",
@@ -7466,6 +7520,103 @@ async def auto_config_checkpoint(bot: Bot) -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_CONFIG_CHECKPOINT)
 
 
+RECENTLY_EXPIRED_TRIAL_FOLLOWUP_DELAY_SEC = 180
+RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC = 60
+
+
+async def auto_recently_expired_trial_followup(bot: Bot) -> None:
+    """
+    Follow-up для сценария trial expired → paid: через ~3 мин после отправки конфига
+    проверяем handshake; если нет — напоминаем использовать новый конфиг и даём resend.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP):
+        log.info("[RecentExpiredTrialFollowup] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                candidates = db.get_pending_recently_expired_trial_followups(
+                    interval_seconds=RECENTLY_EXPIRED_TRIAL_FOLLOWUP_DELAY_SEC,
+                )
+                if not candidates:
+                    await asyncio.sleep(RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC)
+                    continue
+
+                if hasattr(asyncio, "to_thread"):
+                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                else:
+                    loop = asyncio.get_running_loop()
+                    handshakes = await loop.run_in_executor(
+                        None, wg.get_handshake_timestamps
+                    )
+
+                for row in candidates:
+                    sub_id = row.get("subscription_id")
+                    tg_id = row.get("telegram_user_id")
+                    if not sub_id or not tg_id:
+                        continue
+                    try:
+                        sub = db.get_subscription_by_id(sub_id)
+                        if not sub or not sub.get("active"):
+                            continue
+                        pub_key = (sub.get("wg_public_key") or "").strip()
+                        if not pub_key:
+                            continue
+                        if handshakes.get(pub_key, 0) > 0:
+                            continue
+                        keyboard = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text="📱 Отправить настройки ещё раз",
+                                        callback_data=f"config_check_resend:{sub_id}",
+                                    ),
+                                ],
+                                [
+                                    InlineKeyboardButton(
+                                        text=SUPPORT_BUTTON_TEXT,
+                                        url=SUPPORT_URL,
+                                    ),
+                                ],
+                            ]
+                        )
+                        await bot.send_message(
+                            chat_id=tg_id,
+                            text=TRIAL_EXPIRED_PAID_FOLLOWUP_NO_HANDSHAKE_TEXT,
+                            reply_markup=keyboard,
+                        )
+                        db.create_subscription_notification(
+                            subscription_id=sub_id,
+                            notification_type="recently_expired_trial_followup_sent",
+                            telegram_user_id=tg_id,
+                            expires_at=sub.get("expires_at"),
+                        )
+                        log.info(
+                            "[RecentExpiredTrialFollowup] Sent followup tg_id=%s sub_id=%s",
+                            tg_id,
+                            sub_id,
+                        )
+                    except Exception as e:
+                        log.warning(
+                            "[RecentExpiredTrialFollowup] Failed sub_id=%s tg_id=%s: %r",
+                            sub_id,
+                            tg_id,
+                            e,
+                        )
+                    await asyncio.sleep(1)
+
+                await asyncio.sleep(RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC)
+            except Exception as e:
+                log.error(
+                    "[RecentExpiredTrialFollowup] Unexpected error: %r",
+                    e,
+                )
+                await asyncio.sleep(RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC)
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP)
+
+
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
@@ -7508,6 +7659,7 @@ async def main() -> None:
     asyncio.create_task(auto_welcome_after_first_payment(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
     asyncio.create_task(auto_config_checkpoint(bot))
+    asyncio.create_task(auto_recently_expired_trial_followup(bot))
 
     app = create_app()
     runner = web.AppRunner(app)

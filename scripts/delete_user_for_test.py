@@ -19,11 +19,12 @@ from app.config import settings
 from app import db
 from app import wg
 
-TG_ID = 7997651640
-
 
 def main():
-    tg_id = int(sys.argv[1]) if len(sys.argv) > 1 else TG_ID
+    if len(sys.argv) < 2:
+        print("Использование: python3 scripts/delete_user_for_test.py <telegram_user_id>")
+        sys.exit(1)
+    tg_id = int(sys.argv[1])
     print(f"Удаление пользователя {tg_id} из БД...")
 
     # 1. Подписки — удалить peer из WG, вернуть IP, удалить запись

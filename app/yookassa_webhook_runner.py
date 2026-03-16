@@ -13,7 +13,12 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
-from .bot import send_vpn_config_to_user, send_subscription_extended_notification, send_referral_reward_notification
+from .bot import (
+    send_vpn_config_to_user,
+    send_subscription_extended_notification,
+    send_referral_reward_notification,
+    send_trial_expired_paid_notification,
+)
 from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
 from .config import settings
 
@@ -666,6 +671,20 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                 payment_id,
             )
 
+            # UX: trial expired → paid — предупредить использовать новый конфиг
+            recently_expired_trial = db.has_recently_expired_subscription(
+                telegram_user_id, within_hours=48
+            )
+            if recently_expired_trial:
+                try:
+                    await send_trial_expired_paid_notification(telegram_user_id)
+                except Exception as e:
+                    log.warning(
+                        "[YooKassaWebhook] Failed to send trial-expired-paid notification tg_id=%s: %r",
+                        telegram_user_id,
+                        e,
+                    )
+
             # Генерим конфиг и отправляем пользователю в Telegram
             config_text = wg.build_client_config(
                 client_private_key=client_priv,
@@ -688,6 +707,20 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                     payment_id,
                     e,
                 )
+            if recently_expired_trial:
+                try:
+                    db.create_subscription_notification(
+                        subscription_id=subscription_id,
+                        notification_type="recently_expired_trial_followup",
+                        telegram_user_id=telegram_user_id,
+                        expires_at=expires_at,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "[YooKassaWebhook] Failed to register recently_expired_trial_followup sub_id=%s: %r",
+                        subscription_id,
+                        e,
+                    )
             try:
                 await send_admin_payment_notification(
                     telegram_user_id=telegram_user_id,

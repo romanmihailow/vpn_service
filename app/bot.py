@@ -22,6 +22,7 @@ from .messages import (
     SUPPORT_AFTER_CONFIG_HINT,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
+    TRIAL_EXPIRED_PAID_NOTIFICATION_TEXT,
 )
 import qrcode
 
@@ -95,6 +96,31 @@ async def send_config_checkpoint_message(
             "[ConfigCheckpoint] Sent checkpoint to tg_id=%s sub_id=%s",
             telegram_user_id,
             subscription_id,
+        )
+    finally:
+        await bot.session.close()
+
+
+async def send_trial_expired_paid_notification(telegram_user_id: int) -> None:
+    """
+    Отправляет сообщение «используй НОВЫЙ конфиг» перед отправкой конфига
+    в сценарии trial expired → paid. Вызывается только при recently_expired_trial.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+            ]
+        )
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=TRIAL_EXPIRED_PAID_NOTIFICATION_TEXT,
+            reply_markup=keyboard,
+        )
+        log.info(
+            "[TrialExpiredPaid] Sent notification to tg_id=%s",
+            telegram_user_id,
         )
     finally:
         await bot.session.close()
