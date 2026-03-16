@@ -15,7 +15,6 @@ from .messages import (
     CONFIG_QR_CAPTION,
     CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
-    ONBOARDING_START_BUTTON,
     ONBOARDING_WG_DOWNLOAD_BUTTON,
     ONBOARDING_WIREGUARD_QUESTION,
     ONBOARDING_WG_YES_BUTTON,
@@ -177,21 +176,17 @@ async def send_vpn_config_to_user(
         except Exception:
             pass
         if sub and sub.get("id"):
-            # P0 UX: главное действие первая строка (Подключить VPN + Нужна помощь), проверка — вторая
+            # Post-config: только «Проверить подключение» и «Нужна помощь» (без кнопки «Подключить VPN»)
             instruction_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=ONBOARDING_START_BUTTON,
-                            callback_data="onboarding:start",
-                        ),
-                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
-                    ],
                     [
                         InlineKeyboardButton(
                             text=CONFIG_CHECK_NOW_BUTTON_TEXT,
                             callback_data=f"config_check_now:{sub['id']}",
                         ),
+                    ],
+                    [
+                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
                 ]
             )
@@ -199,10 +194,6 @@ async def send_vpn_config_to_user(
             instruction_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
-                        InlineKeyboardButton(
-                            text=ONBOARDING_START_BUTTON,
-                            callback_data="onboarding:start",
-                        ),
                         InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
                 ]

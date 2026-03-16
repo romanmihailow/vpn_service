@@ -6784,12 +6784,28 @@ NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы увед
 
 HANDSHAKE_USER_CONNECTED_TEXT = (
     "VPN подключён 👍\n\n"
-    "Если соединение работает стабильно, можно закрепить доступ, "
-    "чтобы он не отключился после теста.\n\n"
-    "Самый популярный тариф:\n"
-    "• 3 месяца — 270 ₽\n\n"
-    "Это на 30% дешевле помесячной оплаты.\n\n"
-    "Оформить можно здесь:\n/buy"
+    "Соединение работает.\n\n"
+    "Пробный доступ активен 7 дней.\n\n"
+    "Чтобы VPN не отключился после теста,\n"
+    "можно закрепить доступ уже сейчас.\n\n"
+    "🔥 Самый популярный тариф\n"
+    "3 месяца — 270 ₽\n\n"
+    "Это на 30% дешевле помесячной оплаты."
+)
+
+# CTA-клавиатура под первым handshake-сообщением (upsell)
+HANDSHAKE_USER_CONNECTED_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="💎 Закрепить доступ — 270 ₽",
+                callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="📅 Все тарифы", callback_data="pay:open"),
+        ],
+    ]
 )
 
 HANDSHAKE_FOLLOWUP_10M_TEXT = (
@@ -6933,13 +6949,14 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     expires_str = _fmt_exp(sub.get("expires_at"))
                     event = sub.get("last_event_name") or ""
 
-                    # Уведомление пользователю при первом handshake
+                    # Уведомление пользователю при первом handshake (CTA-кнопки для upsell)
                     if tg_id and not db.has_subscription_notification(sub_id, "handshake_user_connected"):
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=tg_id,
                             text=HANDSHAKE_USER_CONNECTED_TEXT,
                             disable_web_page_preview=True,
+                            reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
                         )
                         if ok:
                             try:
