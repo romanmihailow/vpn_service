@@ -341,7 +341,7 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
 
     elif result.intent == "smalltalk":
         meta["action"] = "smalltalk"
-        reply_text = action_smalltalk()
+        reply_text, reply_markup = action_smalltalk()
 
     else:
         meta["action"] = "unclear"

@@ -16,6 +16,7 @@ from ..messages import (
     HELP_INSTRUCTION,
     MY_ID_RESPONSE_TEMPLATE,
     MY_ID_UNAVAILABLE,
+    ONBOARDING_START_BUTTON,
     PRICING_HEADER,
     PRIVACY_POLICY_RESPONSE,
     REFERRAL_BALANCE_RESPONSE,
@@ -247,9 +248,15 @@ def action_pricing_info() -> Tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
-def action_smalltalk() -> str:
-    """Ответ на smalltalk (кто ты, привет и т.д.)."""
-    return AI_ASSISTANT_ONBOARDING_TEXT
+def action_smalltalk() -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+    """Ответ на smalltalk (кто ты, привет и т.д.). Текст + кнопки «Подключить VPN» и «Нужна помощь»."""
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=ONBOARDING_START_BUTTON, callback_data="onboarding:start")],
+            [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+        ]
+    )
+    return AI_ASSISTANT_ONBOARDING_TEXT, kb
 
 
 def _stale_keyboard(subscription_id: Any) -> InlineKeyboardMarkup:
