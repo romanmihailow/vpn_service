@@ -797,9 +797,57 @@ SUBSCRIBE_KEYBOARD = InlineKeyboardMarkup(
     ]
 )
 
+# Клавиатура только для /start: без реферала и сайта, чтобы не отвлекать от trial/покупки (P0 UX)
+START_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🛒 Купить подписку",
+                callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎮 Оплатить баллами",
+                callback_data="points:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎟 Ввести промокод",
+                callback_data="promo:open",
+            ),
+        ],
+    ]
+)
+
 
 REF_SHARE_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🤝 Пригласить друга",
+                callback_data="ref:open_from_ref",
+            ),
+        ],
+    ]
+)
+
+# Клавиатура для экрана /subscription: оплата главная, реферал второстепенный (P0 UX)
+SUBSCRIPTION_PAGE_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🛒 Купить подписку",
+                callback_data="pay:open",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎮 Оплатить баллами",
+                callback_data="points:open",
+            ),
+        ],
         [
             InlineKeyboardButton(
                 text="🤝 Пригласить друга",
@@ -829,10 +877,9 @@ POINTS_KEYBOARD = InlineKeyboardMarkup(
 
 
 def get_start_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
-    """Клавиатура для /start. Добавляет кнопку триала, если пользователь может его получить."""
+    """Клавиатура для /start: только главные действия (trial, купить, баллы, промо). Без реферала и сайта (P0 UX)."""
     if not db.user_can_claim_referral_trial(telegram_user_id):
-        return SUBSCRIBE_KEYBOARD
-    # Добавляем кнопку триала в начало
+        return START_KEYBOARD
     rows = [
         [
             InlineKeyboardButton(
@@ -840,7 +887,7 @@ def get_start_keyboard(telegram_user_id: int) -> InlineKeyboardMarkup:
                 callback_data="ref_trial:claim",
             ),
         ],
-    ] + [r for r in SUBSCRIBE_KEYBOARD.inline_keyboard]
+    ] + [r for r in START_KEYBOARD.inline_keyboard]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1280,7 +1327,7 @@ async def cmd_subscription(message: Message) -> None:
     await message.answer(
         text,
         disable_web_page_preview=True,
-        reply_markup=REF_SHARE_KEYBOARD,
+        reply_markup=SUBSCRIPTION_PAGE_KEYBOARD,
     )
 
 
@@ -2848,7 +2895,7 @@ async def vpn_ok_callback(callback: CallbackQuery) -> None:
     buy_kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="pay:open")],
-            [InlineKeyboardButton(text="🤝 Получить ссылку", callback_data=f"ref:open_from_notify:{sub_id}")],
+            [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data=f"ref:open_from_notify:{sub_id}")],
         ]
     )
     await callback.message.answer(
@@ -6754,7 +6801,7 @@ HANDSHAKE_FOLLOWUP_2H_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [InlineKeyboardButton(text="🛒 Закрепить доступ", callback_data="pay:open")],
         [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
-        [InlineKeyboardButton(text="🙋 Нужна помощь", url=SUPPORT_URL)],
+        [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
     ]
 )
 
@@ -6764,7 +6811,8 @@ NO_HANDSHAKE_SURVEY_TEXT = (
     "2️⃣ Пока не нужен\n"
     "3️⃣ Пользуюсь другим VPN\n"
     "4️⃣ Дорого\n\n"
-    "Если ответите цифрой, это поможет нам улучшить сервис."
+    "Если ответите цифрой, это поможет нам улучшить сервис.\n\n"
+    "Напишите в чат цифру 1–4."
 )
 
 WELCOME_AFTER_FIRST_PAYMENT_INTERVAL_SEC = 600
@@ -7044,7 +7092,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                     InlineKeyboardButton(text="Всё работает", callback_data=f"vpn_ok:{sub_id}"),
                 ],
                 [
-                    InlineKeyboardButton(text="Нужна помощь", url=SUPPORT_URL),
+                    InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                 ],
             ]
         )

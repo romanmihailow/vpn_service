@@ -151,6 +151,7 @@ async def send_vpn_config_to_user(
         except Exception:
             pass
         if sub and sub.get("id"):
+            # P0 UX: главное действие первая строка (Подключить VPN + Нужна помощь), проверка — вторая
             instruction_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
@@ -158,6 +159,7 @@ async def send_vpn_config_to_user(
                             text=ONBOARDING_START_BUTTON,
                             callback_data="onboarding:start",
                         ),
+                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
                     [
                         InlineKeyboardButton(
@@ -165,7 +167,6 @@ async def send_vpn_config_to_user(
                             callback_data=f"config_check_now:{sub['id']}",
                         ),
                     ],
-                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
                 ]
             )
         else:
@@ -176,8 +177,8 @@ async def send_vpn_config_to_user(
                             text=ONBOARDING_START_BUTTON,
                             callback_data="onboarding:start",
                         ),
+                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
-                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
                 ]
             )
         instruction_with_hint = CONNECTION_INSTRUCTION_SHORT + "\n\n" + SUPPORT_AFTER_CONFIG_HINT
