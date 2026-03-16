@@ -2683,128 +2683,97 @@ async def cmd_ref(message: Message) -> None:
         )
         return
 
-    ref_code = info.get("ref_code")
-    invited_count = info.get("invited_count") or 0
-    paid_referrals_count = info.get("paid_referrals_count") or 0
-
-    invited_by_levels = info.get("invited_by_levels") or {}
-    paid_by_levels = info.get("paid_by_levels") or {}
-    paid_points_count = info.get("paid_points_count") or 0
-    paid_points_by_levels = info.get("paid_points_by_levels") or {}
-
-    # Пытаемся получить username бота, чтобы собрать полноценную ссылку
     try:
-        me = await message.bot.get_me()
-        bot_username = me.username
-    except Exception as e:
-        log.error(
-            "[Referral] Failed to get bot username for tg_id=%s: %r",
-            telegram_user_id,
-            e,
-        )
-        bot_username = None
+        ref_code = info.get("ref_code")
+        invited_count = info.get("invited_count") or 0
+        paid_referrals_count = info.get("paid_referrals_count") or 0
 
-    if bot_username and ref_code:
-        deep_link = f"https://t.me/{bot_username}?start={ref_code}"
-    elif ref_code:
-        deep_link = f"/start {ref_code}"
-    else:
-        deep_link = None
+        invited_by_levels = info.get("invited_by_levels") or {}
+        paid_by_levels = info.get("paid_by_levels") or {}
+        paid_points_count = info.get("paid_points_count") or 0
+        paid_points_by_levels = info.get("paid_points_by_levels") or {}
 
-    lines: List[str] = []
-
-    # Заголовок
-    lines.append("👥 <b>Твоя реферальная ссылка</b>\n")
-    lines.append("Приглашай друзей и получай бонусные дни VPN,\nкогда они подключаются и оплачивают подписку.\n")
-
-    # Код
-    if ref_code:
-        lines.append(f"Код: <code>{ref_code}</code>")
-    else:
-        lines.append("Код: <i>не удалось сгенерировать</i>")
-
-    # Ссылка
-    if deep_link:
-        lines.append(f'Ссылка: <a href="{deep_link}">{deep_link}</a>')
-    else:
-        lines.append("Ссылка: <i>недоступна</i>")
-
-    # Пустая строка
-    lines.append("")
-
-    # Сводка по первой линии (без дублирования ниже)
-    lines.append("📊 <b>Сводка:</b>")
-    lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
-    lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
-    if paid_points_count:
-        lines.append(f"• 1-я линия — оплатили баллами: <b>{paid_points_count}</b>")
-
-    # Пустая строка перед уровнями
-    lines.append("")
-
-    # Блок уровней 2–5 в формате: «приглашено / оплатили» и отдельно оплатили баллами
-    lines.append("Уровни 2–5 (приглашено / оплатили):")
-    for level in range(2, 6):
-        lvl_inv = invited_by_levels.get(level) or 0
-        lvl_paid = paid_by_levels.get(level) or 0
-        lvl_pts = paid_points_by_levels.get(level) or 0
-        if lvl_pts:
-            lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid} (баллами: {lvl_pts})")
-        else:
-            lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
-
-    if is_admin(message):
-        lines.append("")
-        lines.append("🔧 <b>Админ:</b>")
+        # Пытаемся получить username бота, чтобы собрать полноценную ссылку
         try:
-            stats = db.get_referral_admin_stats()
+            me = await message.bot.get_me()
+            bot_username = me.username
         except Exception as e:
             log.error(
-                "[Referral] Failed to get referral admin stats for tg_id=%s: %r",
+                "[Referral] Failed to get bot username for tg_id=%s: %r",
                 telegram_user_id,
                 e,
             )
-            stats = {}
-        if stats:
-            lines.append(
-                f"• Активных подписчиков: <b>{stats.get('active_subscribers', 0)}</b>"
-            )
-            connected_7d = None
+            bot_username = None
+
+        if bot_username and ref_code:
+            deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+        elif ref_code:
+            deep_link = f"/start {ref_code}"
+        else:
+            deep_link = None
+
+        lines = []
+
+        # Заголовок
+        lines.append("👥 <b>Твоя реферальная ссылка</b>\n")
+        lines.append("Приглашай друзей и получай бонусные дни VPN,\nкогда они подключаются и оплачивают подписку.\n")
+
+        # Код
+        if ref_code:
+            lines.append(f"Код: <code>{ref_code}</code>")
+        else:
+            lines.append("Код: <i>не удалось сгенерировать</i>")
+
+        # Ссылка
+        if deep_link:
+            lines.append(f'Ссылка: <a href="{deep_link}">{deep_link}</a>')
+        else:
+            lines.append("Ссылка: <i>недоступна</i>")
+
+        # Пустая строка
+        lines.append("")
+
+        # Сводка по первой линии (без дублирования ниже)
+        lines.append("📊 <b>Сводка:</b>")
+        lines.append(f"• 1-я линия — приглашено: <b>{invited_count}</b>")
+        lines.append(f"• 1-я линия — оплатили: <b>{paid_referrals_count}</b>")
+        if paid_points_count:
+            lines.append(f"• 1-я линия — оплатили баллами: <b>{paid_points_count}</b>")
+
+        # Пустая строка перед уровнями
+        lines.append("")
+
+        # Блок уровней 2–5 в формате: «приглашено / оплатили» и отдельно оплатили баллами
+        lines.append("Уровни 2–5 (приглашено / оплатили):")
+        for level in range(2, 6):
+            lvl_inv = invited_by_levels.get(level) or 0
+            lvl_paid = paid_by_levels.get(level) or 0
+            lvl_pts = paid_points_by_levels.get(level) or 0
+            if lvl_pts:
+                lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid} (баллами: {lvl_pts})")
+            else:
+                lines.append(f"• {level} уровень — {lvl_inv} / {lvl_paid}")
+
+        if is_admin(message):
+            lines.append("")
+            lines.append("🔧 <b>Админ:</b>")
             try:
-                pairs = db.get_all_active_public_keys_with_users()
-                if pairs:
-                    if hasattr(asyncio, "to_thread"):
-                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
-                    else:
-                        loop = asyncio.get_running_loop()
-                        handshakes = await loop.run_in_executor(
-                            None, wg.get_handshake_timestamps
-                        )
-                    cutoff = int(time.time()) - 7 * 24 * 3600
-                    connected_7d = sum(
-                        1 for uid, pk in pairs if handshakes.get(pk, 0) >= cutoff
-                    )
+                stats = db.get_referral_admin_stats()
             except Exception as e:
-                log.warning(
-                    "[Referral] Failed to get handshakes for connected_7d: %r",
+                log.error(
+                    "[Referral] Failed to get referral admin stats for tg_id=%s: %r",
+                    telegram_user_id,
                     e,
                 )
-            if connected_7d is not None:
+                stats = {}
+            if stats:
                 lines.append(
-                    f"• Handshake за 7 дн.: <b>{connected_7d}</b>"
+                    f"• Активных подписчиков: <b>{stats.get('active_subscribers', 0)}</b>"
                 )
-            lines.append(
-                f"• По промокодам: <b>{stats.get('promo_subscribers', 0)}</b>"
-            )
-            lines.append(
-                f"• Всего когда-либо: <b>{stats.get('total_unique_ever', 0)}</b>"
-            )
-            new_today = stats.get("new_active_today", 0)
-            connected_today = None
-            if new_today > 0:
+                connected_7d = None
                 try:
-                    pubkeys = db.get_new_active_today_public_keys()
-                    if pubkeys:
+                    pairs = db.get_all_active_public_keys_with_users()
+                    if pairs:
                         if hasattr(asyncio, "to_thread"):
                             handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
                         else:
@@ -2812,32 +2781,77 @@ async def cmd_ref(message: Message) -> None:
                             handshakes = await loop.run_in_executor(
                                 None, wg.get_handshake_timestamps
                             )
-                        connected_today = sum(
-                            1 for pk in pubkeys if handshakes.get(pk, 0) > 0
+                        cutoff = int(time.time()) - 7 * 24 * 3600
+                        connected_7d = sum(
+                            1 for uid, pk in pairs if handshakes.get(pk, 0) >= cutoff
                         )
                 except Exception as e:
                     log.warning(
-                        "[Referral] Failed to get handshakes for new_today: %r",
+                        "[Referral] Failed to get handshakes for connected_7d: %r",
                         e,
                     )
-            if connected_today is not None:
+                if connected_7d is not None:
+                    lines.append(
+                        f"• Handshake за 7 дн.: <b>{connected_7d}</b>"
+                    )
                 lines.append(
-                    f"• Новых за сегодня: <b>{new_today}</b> (подключились: <b>{connected_today}</b>)"
+                    f"• По промокодам: <b>{stats.get('promo_subscribers', 0)}</b>"
                 )
-            else:
                 lines.append(
-                    f"• Новых за сегодня: <b>{new_today}</b>"
+                    f"• Всего когда-либо: <b>{stats.get('total_unique_ever', 0)}</b>"
                 )
-            lines.append(
-                f"• Оплатили / триал+промо: <b>{stats.get('paid_active', 0)}</b> / <b>{stats.get('trial_promo_active', 0)}</b>"
-            )
+                new_today = stats.get("new_active_today", 0)
+                connected_today = None
+                if new_today > 0:
+                    try:
+                        pubkeys = db.get_new_active_today_public_keys()
+                        if pubkeys:
+                            if hasattr(asyncio, "to_thread"):
+                                handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
+                            else:
+                                loop = asyncio.get_running_loop()
+                                handshakes = await loop.run_in_executor(
+                                    None, wg.get_handshake_timestamps
+                                )
+                            connected_today = sum(
+                                1 for pk in pubkeys if handshakes.get(pk, 0) > 0
+                            )
+                    except Exception as e:
+                        log.warning(
+                            "[Referral] Failed to get handshakes for new_today: %r",
+                            e,
+                        )
+                if connected_today is not None:
+                    lines.append(
+                        f"• Новых за сегодня: <b>{new_today}</b> (подключились: <b>{connected_today}</b>)"
+                    )
+                else:
+                    lines.append(
+                        f"• Новых за сегодня: <b>{new_today}</b>"
+                    )
+                lines.append(
+                    f"• Оплатили / триал+промо: <b>{stats.get('paid_active', 0)}</b> / <b>{stats.get('trial_promo_active', 0)}</b>"
+                )
 
-    text = "\n".join(lines)
-    await message.answer(
-        text,
-        disable_web_page_preview=True,
-        reply_markup=REF_SHARE_KEYBOARD,
-    )
+        text = "\n".join(lines)
+        await message.answer(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=REF_SHARE_KEYBOARD,
+        )
+    except Exception:
+        log.exception(
+            "[Referral] Failed to build or send /ref reply for tg_id=%s",
+            telegram_user_id,
+        )
+        try:
+            await message.answer(
+                "Не удалось загрузить реферальную информацию. "
+                "Попробуй ещё раз через минуту или напиши в поддержку.",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            log.exception("[Referral] Fallback answer also failed")
 
 
 @router.callback_query(F.data == "ref_trial:claim")
@@ -6873,6 +6887,8 @@ VPN_OK_ANSWER_TEXT = (
 SUPPORT_URL = "https://t.me/maxnet_vpn_support"
 
 HANDSHAKE_FOLLOWUP_INTERVAL_SEC = 120
+# Максимум кандидатов за один прогон по каждому follow-up type (снижает нагрузку на DB pool)
+HANDSHAKE_FOLLOWUP_BATCH_SIZE = 20
 
 WELCOME_AFTER_FIRST_PAYMENT_TEXT = (
     "Спасибо за подключение к MaxNet VPN 🙌\n\n"
@@ -7218,7 +7234,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
             try:
                 for followup_type, text, has_buttons in FOLLOWUPS:
                     candidates = db.get_handshake_followup_candidates(followup_type)
-                    for row in candidates:
+                    for row in candidates[:HANDSHAKE_FOLLOWUP_BATCH_SIZE]:
                         sub_id = row.get("subscription_id")
                         tg_id = row.get("telegram_user_id")
                         if not tg_id:
