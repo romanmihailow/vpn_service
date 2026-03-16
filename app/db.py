@@ -2171,6 +2171,37 @@ def get_handshake_followup_candidates(
             return [dict(r) for r in rows]
 
 
+def get_handshake_short_confirmation_candidates(
+    interval_seconds: int = 60,
+) -> List[Dict[str, Any]]:
+    """
+    Подписки, которым пора отправить short confirmation follow-up:
+    есть handshake_user_connected, sent_at не менее interval_seconds назад,
+    handshake_short_confirmation ещё не отправлялся.
+    """
+    sql = """
+    SELECT n.subscription_id, n.telegram_user_id, n.expires_at
+    FROM subscription_notifications n
+    JOIN vpn_subscriptions s ON s.id = n.subscription_id
+    WHERE n.notification_type = 'handshake_user_connected'
+      AND n.telegram_user_id IS NOT NULL
+      AND n.sent_at <= NOW() - INTERVAL '1 second' * %s
+      AND s.active = TRUE
+      AND s.expires_at > NOW()
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n2
+        WHERE n2.subscription_id = n.subscription_id
+          AND n2.notification_type = 'handshake_short_confirmation'
+      )
+    ORDER BY n.sent_at ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (interval_seconds,))
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+
+
 def is_user_first_subscription(telegram_user_id: int) -> bool:
     """
     True если у пользователя ровно одна подписка (первый раз в сервисе).

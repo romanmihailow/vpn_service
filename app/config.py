@@ -28,6 +28,9 @@ class Settings(BaseModel):
     DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP: int = int(
         os.getenv("DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP", "2009")
     )
+    DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION: int = int(
+        os.getenv("DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION", "2010")
+    )
 
     WG_INTERFACE_NAME: str = os.getenv("WG_INTERFACE_NAME", "wg0")
     WG_SERVER_PUBLIC_KEY: str = os.getenv("WG_SERVER_PUBLIC_KEY", "")

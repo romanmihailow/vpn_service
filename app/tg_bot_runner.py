@@ -35,6 +35,7 @@ from .messages import (
     CONFIG_CHECK_OPTIONS,
     CONFIG_CHECK_SUCCESS,
     CONFIG_CHECK_NOW_BUTTON_TEXT,
+    HANDSHAKE_SHORT_CONFIRMATION_TEXT,
     HELP_INSTRUCTION,
     ONBOARDING_DEVICE_ANDROID,
     ONBOARDING_DEVICE_COMPUTER,
@@ -7238,6 +7239,65 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
         db.release_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP)
 
 
+HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC = 60
+HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC = 60
+
+
+async def auto_handshake_short_confirmation(bot: Bot) -> None:
+    """
+    Short confirmation follow-up ~60 сек после первого handshake-сообщения.
+    Только подтверждение «всё ок» + кнопка поддержки, без продажи.
+    """
+    if not db.acquire_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION):
+        log.info("[HandshakeShortConfirm] Job already running in another instance")
+        return
+
+    try:
+        while True:
+            try:
+                candidates = db.get_handshake_short_confirmation_candidates(
+                    interval_seconds=HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC,
+                )
+                for row in candidates:
+                    tg_id = row.get("telegram_user_id")
+                    sub_id = row.get("subscription_id")
+                    if not tg_id:
+                        continue
+                    support_kb = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
+                        ]
+                    )
+                    ok = await safe_send_message(
+                        bot=bot,
+                        chat_id=tg_id,
+                        text=HANDSHAKE_SHORT_CONFIRMATION_TEXT,
+                        reply_markup=support_kb,
+                    )
+                    if ok:
+                        try:
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type="handshake_short_confirmation",
+                                telegram_user_id=tg_id,
+                                expires_at=row.get("expires_at"),
+                            )
+                        except Exception as e:
+                            log.warning(
+                                "[HandshakeShortConfirm] Failed to record sub_id=%s: %r",
+                                sub_id,
+                                e,
+                            )
+                    await asyncio.sleep(1)
+            except Exception as e:
+                log.error("[HandshakeShortConfirm] Unexpected error: %r", e)
+
+            await asyncio.sleep(HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC)
+
+    finally:
+        db.release_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION)
+
+
 async def auto_no_handshake_reminder(bot: Bot) -> None:
     """
     Раз в час проверяет подписки, по которым пользователь ещё не подключался (нет handshake),
@@ -7675,6 +7735,7 @@ async def main() -> None:
     asyncio.create_task(auto_revoke_unused_promo_points())
     asyncio.create_task(auto_new_handshake_admin_notification(bot))
     asyncio.create_task(auto_handshake_followup_notifications(bot))
+    asyncio.create_task(auto_handshake_short_confirmation(bot))
     asyncio.create_task(auto_welcome_after_first_payment(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
     asyncio.create_task(auto_config_checkpoint(bot))

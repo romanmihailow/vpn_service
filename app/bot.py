@@ -13,12 +13,10 @@ from .messages import (
     CONFIG_CHECK_MESSAGE,
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONFIG_QR_CAPTION,
-    CONNECTION_INSTRUCTION_SHORT,
     DEFAULT_CONFIG_CAPTION,
     ONBOARDING_WG_DOWNLOAD_BUTTON,
-    ONBOARDING_WIREGUARD_QUESTION,
     ONBOARDING_WG_YES_BUTTON,
-    SUPPORT_AFTER_CONFIG_HINT,
+    POST_CONFIG_INSTRUCTION_COMBINED,
     SUPPORT_BUTTON_TEXT,
     SUPPORT_URL,
     TRIAL_EXPIRED_PAID_NOTIFICATION_TEXT,
@@ -135,7 +133,7 @@ async def send_vpn_config_to_user(
     Отправляем пользователю:
     1) конфиг файлом
     2) QR-код
-    3) короткую инструкцию
+    3) объединённую инструкцию (WireGuard + проверка подключения + кнопки)
 
     Между сообщениями задержка ~0.7 сек для последовательного чтения.
     Если schedule_checkpoint=True (по умолчанию), через ~3 мин отправляется
@@ -169,68 +167,55 @@ async def send_vpn_config_to_user(
         log.info("[SendConfig] QR photo sent to tg_id=%s", telegram_user_id)
         await asyncio.sleep(CONFIG_SEND_DELAY_SEC)
 
-        # 3. Короткая инструкция + кнопки (проверить подключение, нужна помощь)
+        # 3. Объединённая инструкция + все кнопки (одно сообщение вместо двух)
         sub = None
         try:
             sub = db.get_latest_subscription_for_telegram(telegram_user_id)
         except Exception:
             pass
+        sub_id = sub.get("id") if sub and sub.get("id") else 0
         if sub and sub.get("id"):
-            # Post-config: только «Проверить подключение» и «Нужна помощь» (без кнопки «Подключить VPN»)
-            instruction_keyboard = InlineKeyboardMarkup(
+            combined_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [
                         InlineKeyboardButton(
                             text=CONFIG_CHECK_NOW_BUTTON_TEXT,
                             callback_data=f"config_check_now:{sub['id']}",
                         ),
+                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
                     [
-                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
+                        InlineKeyboardButton(
+                            text=ONBOARDING_WG_YES_BUTTON,
+                            callback_data=f"onboarding:wireguard_confirm:{sub_id}",
+                        ),
+                        InlineKeyboardButton(
+                            text=ONBOARDING_WG_DOWNLOAD_BUTTON,
+                            callback_data="onboarding:wireguard_download",
+                        ),
                     ],
                 ]
             )
         else:
-            instruction_keyboard = InlineKeyboardMarkup(
+            combined_keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
                     [
-                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
+                        InlineKeyboardButton(
+                            text=ONBOARDING_WG_DOWNLOAD_BUTTON,
+                            callback_data="onboarding:wireguard_download",
+                        ),
                     ],
                 ]
             )
-        instruction_with_hint = CONNECTION_INSTRUCTION_SHORT + "\n\n" + SUPPORT_AFTER_CONFIG_HINT
         await bot.send_message(
             chat_id=telegram_user_id,
-            text=instruction_with_hint,
+            text=POST_CONFIG_INSTRUCTION_COMBINED,
             parse_mode=None,
             disable_web_page_preview=True,
-            reply_markup=instruction_keyboard,
+            reply_markup=combined_keyboard,
         )
-        log.info("[SendConfig] Instruction sent to tg_id=%s", telegram_user_id)
-
-        sub_id = sub.get("id") if sub and sub.get("id") else 0
-        onboarding_keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=ONBOARDING_WG_YES_BUTTON,
-                        callback_data=f"onboarding:wireguard_confirm:{sub_id}",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        text=ONBOARDING_WG_DOWNLOAD_BUTTON,
-                        callback_data="onboarding:wireguard_download",
-                    ),
-                ],
-            ]
-        )
-        await bot.send_message(
-            chat_id=telegram_user_id,
-            text=ONBOARDING_WIREGUARD_QUESTION,
-            reply_markup=onboarding_keyboard,
-        )
-        log.info("[Onboarding] tg_id=%s step=wireguard_check", telegram_user_id)
+        log.info("[SendConfig] Combined instruction sent to tg_id=%s", telegram_user_id)
 
         if schedule_checkpoint:
             try:
