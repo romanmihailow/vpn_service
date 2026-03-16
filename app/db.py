@@ -2173,10 +2173,12 @@ def get_handshake_followup_candidates(
 
 def get_handshake_short_confirmation_candidates(
     interval_seconds: int = 60,
+    max_age_seconds: int = 900,
 ) -> List[Dict[str, Any]]:
     """
     Подписки, которым пора отправить short confirmation follow-up:
     есть handshake_user_connected, sent_at не менее interval_seconds назад,
+    но не более max_age_seconds назад (чтобы не слать старым пользователям при каждом job),
     handshake_short_confirmation ещё не отправлялся.
     """
     sql = """
@@ -2186,6 +2188,7 @@ def get_handshake_short_confirmation_candidates(
     WHERE n.notification_type = 'handshake_user_connected'
       AND n.telegram_user_id IS NOT NULL
       AND n.sent_at <= NOW() - INTERVAL '1 second' * %s
+      AND n.sent_at >= NOW() - INTERVAL '1 second' * %s
       AND s.active = TRUE
       AND s.expires_at > NOW()
       AND NOT EXISTS (
@@ -2197,7 +2200,7 @@ def get_handshake_short_confirmation_candidates(
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute(sql, (interval_seconds,))
+            cur.execute(sql, (interval_seconds, max_age_seconds))
             rows = cur.fetchall()
             return [dict(r) for r in rows]
 

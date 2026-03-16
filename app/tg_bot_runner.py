@@ -7241,6 +7241,8 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
 
 HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC = 60
 HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC = 60
+# Не слать short confirmation, если первое handshake-сообщение было давно (избегаем рассылки при /start старым пользователям)
+HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC = 900  # 15 минут
 
 
 async def auto_handshake_short_confirmation(bot: Bot) -> None:
@@ -7257,6 +7259,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
             try:
                 candidates = db.get_handshake_short_confirmation_candidates(
                     interval_seconds=HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC,
+                    max_age_seconds=HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC,
                 )
                 for row in candidates:
                     tg_id = row.get("telegram_user_id")
