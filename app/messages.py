@@ -162,22 +162,22 @@ REFERRAL_INFO_RESPONSE = (
 SUPPORT_BUTTON_TEXT = "🧑‍💻 Нужна помощь"
 SUPPORT_URL = "https://t.me/MaxNet_VPN_Support"
 
-# === Trial expired → paid: сообщение перед отправкой нового конфига ===
+# === Expired subscription → paid: сообщение перед отправкой нового конфига (универсально: trial/promo/paid) ===
 TRIAL_EXPIRED_PAID_NOTIFICATION_TEXT = (
     "✅ Оплата прошла успешно.\n\n"
     "Важно: используй НОВЫЙ конфиг из сообщений ниже.\n"
-    "Старый trial-конфиг больше не работает.\n\n"
+    "Старый конфиг больше не подходит.\n\n"
     "Что нужно сделать:\n\n"
     "1. Открой приложение WireGuard\n"
-    "2. Удали старый trial-туннель\n"
+    "2. Удали старый туннель\n"
     "3. Импортируй новый vpn.conf или новый QR-код из сообщения ниже\n\n"
     "Если не получается — нажми «🧑‍💻 Нужна помощь»."
 )
 
-# === Trial expired → paid: follow-up если handshake не появился ===
+# === Expired subscription → paid: follow-up если handshake не появился (универсально: trial/promo/paid) ===
 TRIAL_EXPIRED_PAID_FOLLOWUP_NO_HANDSHAKE_TEXT = (
     "Похоже, новый конфиг ещё не подключён.\n\n"
-    "Важно: старый trial-конфиг больше не работает.\n"
+    "Важно: старый конфиг больше не работает.\n"
     "Подключи новый конфиг из последних сообщений."
 )
 
