@@ -2661,6 +2661,7 @@ async def cmd_ref(message: Message) -> None:
 
     # Заголовок
     lines.append("👥 <b>Твоя реферальная ссылка</b>\n")
+    lines.append("Приглашай друзей и получай бонусные дни VPN,\nкогда они подключаются и оплачивают подписку.\n")
 
     # Код
     if ref_code:
@@ -2778,10 +2779,10 @@ async def cmd_ref(message: Message) -> None:
             )
 
     text = "\n".join(lines)
-
     await message.answer(
         text,
         disable_web_page_preview=True,
+        reply_markup=REF_SHARE_KEYBOARD,
     )
 
 
