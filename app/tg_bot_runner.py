@@ -2600,40 +2600,53 @@ async def heleket_tariff_callback(callback: CallbackQuery) -> None:
 
 @router.message(Command("status"))
 async def cmd_status(message: Message) -> None:
-    user_id = message.from_user.id
-
-    sub = db.get_latest_subscription_for_telegram(telegram_user_id=user_id)
-    if not sub:
-        await message.answer(
-            "У тебя пока нет активной VPN-подписки.\n\n"
-            "Оформи подписку командами /buy или /buy_crypto, "
-            "либо воспользуйся кнопками под этим сообщением.",
-            reply_markup=SUBSCRIBE_KEYBOARD,
-        )
+    user = message.from_user
+    if user is None:
+        await message.answer("Не удалось определить твой аккаунт. Попробуй ещё раз.", disable_web_page_preview=True)
         return
+    user_id = user.id
+    log.info("[Status] cmd_status tg_id=%s", user_id)
 
+    try:
+        sub = db.get_latest_subscription_for_telegram(telegram_user_id=user_id)
+        if not sub:
+            await message.answer(
+                "У тебя пока нет активной VPN-подписки.\n\n"
+                "Оформи подписку командами /buy или /buy_crypto, "
+                "либо воспользуйся кнопками под этим сообщением.",
+                reply_markup=SUBSCRIBE_KEYBOARD,
+            )
+            return
 
-    vpn_ip = sub.get("vpn_ip")
-    expires_at = sub.get("expires_at")
+        vpn_ip = sub.get("vpn_ip")
+        expires_at = sub.get("expires_at")
 
-    if isinstance(expires_at, datetime):
-        expires_str = fmt_date(expires_at)
-    else:
-        expires_str = str(expires_at)
+        if isinstance(expires_at, datetime):
+            expires_str = fmt_date(expires_at)
+        else:
+            expires_str = str(expires_at)
 
-    text = (
-        "🔐 Текущий статус VPN-подписки:\n\n"
-        f"• VPN IP: <code>{vpn_ip}</code>\n"
-        f"• Действует до: <b>{expires_str}</b>"
-    )
+        text = (
+            "🔐 Текущий статус VPN-подписки:\n\n"
+            f"• VPN IP: <code>{vpn_ip}</code>\n"
+            f"• Действует до: <b>{expires_str}</b>"
+        )
 
-
-    await message.answer(
-        text,
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-        reply_markup=get_status_keyboard(sub.get("id")),
-    )
+        await message.answer(
+            text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=get_status_keyboard(sub.get("id")),
+        )
+    except Exception as e:
+        log.exception("[Status] Failed tg_id=%s: %r", user_id, e)
+        try:
+            await message.answer(
+                "Не удалось загрузить статус подписки. Попробуй ещё раз через минуту или напиши в поддержку.",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            log.exception("[Status] Fallback answer also failed")
 
 
 @router.message(Command("ref"))
