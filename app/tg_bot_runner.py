@@ -7243,6 +7243,8 @@ HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC = 60
 HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC = 60
 # Не слать short confirmation, если первое handshake-сообщение было давно (избегаем рассылки при /start старым пользователям)
 HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC = 900  # 15 минут
+# Максимум отправок за один прогон job (снижает нагрузку на connection pool)
+HANDSHAKE_SHORT_CONFIRMATION_BATCH_SIZE = 10
 
 
 async def auto_handshake_short_confirmation(bot: Bot) -> None:
@@ -7261,7 +7263,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
                     interval_seconds=HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC,
                     max_age_seconds=HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC,
                 )
-                for row in candidates:
+                for row in candidates[:HANDSHAKE_SHORT_CONFIRMATION_BATCH_SIZE]:
                     tg_id = row.get("telegram_user_id")
                     sub_id = row.get("subscription_id")
                     if not tg_id:
