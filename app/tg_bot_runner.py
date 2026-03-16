@@ -172,8 +172,9 @@ async def _send_admin_new_user_notification(
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = ref_info.get("referrer_username")
         ref_display = fmt_ref_display(ref_name, ref_tg)
-        ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
-        ref_line = f"Реферер: {ref_display} ({ref_count})"
+        referred_count = int(ref_info.get("referred_count") or 0)
+        paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
+        ref_line = f"Реферер: {ref_display} ({referred_count}/{paid_count})"
     else:
         ref_line = "Реферер: —"
     text = (
@@ -214,8 +215,9 @@ async def _send_admin_promo_used_notification(
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = ref_info.get("referrer_username")
         ref_display = fmt_ref_display(ref_name, ref_tg)
-        ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
-        ref_line = f"Реферер: {ref_display} ({ref_count})"
+        referred_count = int(ref_info.get("referred_count") or 0)
+        paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
+        ref_line = f"Реферер: {ref_display} ({referred_count}/{paid_count})"
     else:
         ref_line = "Реферер: —"
     text = (
@@ -6728,10 +6730,11 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         if ref_info:
                             ref_tg = ref_info.get("referrer_telegram_user_id")
                             ref_name = ref_info.get("referrer_username")
-                            ref_count = ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0
                             ref_display = fmt_ref_display(ref_name, ref_tg)
+                            referred_count = int(ref_info.get("referred_count") or 0)
+                            paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
                             trial_lines.append(
-                                f"• {user_line} | Реферер {ref_display} ({ref_count}) | До: {expires_str}"
+                                f"• {user_line} | Реферер {ref_display} ({referred_count}/{paid_count}) | До: {expires_str}"
                             )
                         else:
                             trial_lines.append(f"• {user_line} | До: {expires_str}")
