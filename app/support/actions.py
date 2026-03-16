@@ -13,6 +13,8 @@ from ..messages import (
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
+    MY_ID_RESPONSE_TEMPLATE,
+    MY_ID_UNAVAILABLE,
     PRICING_HEADER,
     PRIVACY_POLICY_RESPONSE,
     REFERRAL_BALANCE_RESPONSE,
@@ -194,6 +196,18 @@ def action_referral_balance() -> Tuple[str, InlineKeyboardMarkup]:
         ]
     )
     return REFERRAL_BALANCE_RESPONSE, kb
+
+
+def action_my_id_info(user_id: int) -> Tuple[str, Optional[InlineKeyboardMarkup]]:
+    """
+    Ответ на запрос своего Telegram ID. Тот же формат, что и команда /my_id.
+    Возвращает (текст, None) — без клавиатуры.
+    """
+    if user_id:
+        text = MY_ID_RESPONSE_TEMPLATE.format(id=user_id)
+    else:
+        text = MY_ID_UNAVAILABLE
+    return text, None
 
 
 def action_pricing_info() -> Tuple[str, InlineKeyboardMarkup]:

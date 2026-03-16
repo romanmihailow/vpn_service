@@ -2,7 +2,7 @@
 Классификация намерений пользователя (rule-based MVP).
 Порядок: human_request → missing_config_after_payment → resend_config →
 vpn_not_working → privacy_policy → referral_stats → referral_balance → referral_info →
-subscription_status → pricing_info → connect_help → handshake_status → smalltalk → unclear.
+subscription_status → pricing_info → connect_help → handshake_status → my_id_info → smalltalk → unclear.
 """
 import re
 from typing import Dict, Any
@@ -115,6 +115,19 @@ HANDSHAKE_PATTERNS = [
     r"handshake", r"подключился ли", r"подключилась ли", r"есть ли подключение",
     r"vpn работает", r"работает ли vpn", r"соединение установлено",
 ]
+MY_ID_PATTERNS = [
+    r"мой id",
+    r"мой айди",
+    r"какой у меня id",
+    r"какой у меня айди",
+    r"покажи мой id",
+    r"покажи мой айди",
+    r"мой telegram id",
+    r"мой telegram айди",
+    r"мой телеграм id",
+    r"мой телеграм айди",
+    r"мой идентификатор",
+]
 SMALLTALK_PHRASES = (
     "кто ты",
     "что ты умеешь",
@@ -193,7 +206,11 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if _match_patterns(t, HANDSHAKE_PATTERNS):
         return IntentResult(intent="handshake_status", confidence=0.8)
 
-    # 13. smalltalk
+    # 13. my_id_info (запрос своего Telegram ID)
+    if _match_patterns(t, MY_ID_PATTERNS):
+        return IntentResult(intent="my_id_info", confidence=0.85)
+
+    # 14. smalltalk
     short = t.lower().strip()
     if short in SMALLTALK_PHRASES:
         return IntentResult(intent="smalltalk", confidence=0.7)
@@ -207,5 +224,5 @@ def classify_intent(text: str, context: Dict[str, Any]) -> IntentResult:
     if short in ("подписка", "статус", "до когда"):
         return IntentResult(intent="subscription_status", confidence=0.7)
 
-    # 14. unclear
+    # 15. unclear
     return IntentResult(intent="unclear", confidence=0.2)

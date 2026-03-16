@@ -44,6 +44,8 @@ from .messages import (
     ONBOARDING_READY_BUTTON,
     ONBOARDING_WG_CONFIRM_MESSAGE,
     ONBOARDING_WG_DOWNLOAD_MESSAGE,
+    MY_ID_RESPONSE_TEMPLATE,
+    MY_ID_UNAVAILABLE,
     PRICING_HEADER,
     REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
     REF_LINK_WELCOME_TEXT,
@@ -1223,12 +1225,13 @@ async def cmd_support(message: Message) -> None:
 
 @router.message(Command("my_id"))
 async def cmd_my_id(message: Message) -> None:
-    admin_id = getattr(settings, "ADMIN_TELEGRAM_ID", 0)
-    await message.answer(
-        f"Твой Telegram ID: <code>{message.from_user.id}</code>\n",
-        #f"ADMIN_TELEGRAM_ID из .env: <code>{admin_id}</code>",
-        disable_web_page_preview=True,
+    uid = message.from_user.id if message.from_user else None
+    text = (
+        MY_ID_RESPONSE_TEMPLATE.format(id=uid)
+        if uid
+        else MY_ID_UNAVAILABLE
     )
+    await message.answer(text, disable_web_page_preview=True)
 
 @router.message(Command("subscription"))
 async def cmd_subscription(message: Message) -> None:

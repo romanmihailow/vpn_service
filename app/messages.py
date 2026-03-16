@@ -249,6 +249,12 @@ SUBSCRIPTION_TEXT = (
     "🌐 Официальный сайт: https://maxnetvpn.ru"
 )
 
+# === /my_id (используется командой и AI-support intent my_id_info) ===
+MY_ID_RESPONSE_TEMPLATE = "Твой Telegram ID: <code>{id}</code>\n"
+MY_ID_UNAVAILABLE = (
+    "Не удалось определить твой Telegram ID. Попробуй ещё раз через команду /my_id."
+)
+
 # === /help — короткая инструкция без привязки к «я отправил» ===
 HELP_INSTRUCTION = (
     "📱 Подключение к VPN:\n\n"
