@@ -2,8 +2,10 @@
 AI Support: оркестрация обработки сообщения.
 Использует context, intents, guardrails, actions. Опционально — OpenAI для формулировки.
 Расширения: semantic FAQ match при unclear, short-term conversation memory, intent_source в логах.
+Опрос причины отказа (no handshake survey): при ответе 1/2/3/4 сохраняем и возвращаем подтверждение.
 """
 import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiogram.types import InlineKeyboardMarkup, Message
@@ -38,6 +40,61 @@ from .actions import (
 from .models import IntentResult
 
 log = get_support_ai_logger()
+
+
+def _normalize_survey_answer(text: str) -> Optional[int]:
+    """
+    Принимает только явный ответ опроса: 1, 2, 3 или 4.
+    Допускает: "1", "1.", "1 ", "1️⃣". Не принимает "12", "123", "1 2".
+    """
+    if not text or len(text) > 10:
+        return None
+    s = text.strip()
+    s = s.replace("\uFE0F", "").replace("\u20E3", "")
+    for emoji, num in [("1️⃣", "1"), ("2️⃣", "2"), ("3️⃣", "3"), ("4️⃣", "4")]:
+        s = s.replace(emoji, num)
+    if not re.match(r"^[1-4]\s*\.?\s*$", s):
+        return None
+    return int(s[0])
+
+
+def try_record_survey_answer(telegram_user_id: int, text: str) -> Optional[str]:
+    """
+    Если сообщение — ответ на опрос причины отказа (1/2/3/4): сохраняет ответ и возвращает
+    текст подтверждения; при уже сохранённом ответе — «Ответ уже сохранён»; иначе None.
+    """
+    answer = _normalize_survey_answer(text)
+    if answer is None:
+        return None
+    sub = db.get_eligible_subscription_for_survey_answer(telegram_user_id)
+    if not sub:
+        if db.user_has_any_survey_answer(telegram_user_id):
+            from ..messages import SURVEY_ANSWER_ALREADY_SAVED
+            return SURVEY_ANSWER_ALREADY_SAVED
+        return None
+    sub_id = sub.get("id")
+    expires_at = sub.get("expires_at")
+    if not sub_id:
+        return None
+    notification_type = f"no_handshake_survey_answer_{answer}"
+    try:
+        db.create_subscription_notification(
+            subscription_id=sub_id,
+            notification_type=notification_type,
+            telegram_user_id=telegram_user_id,
+            expires_at=expires_at,
+        )
+    except Exception as e:
+        log.warning("Survey answer save failed tg_id=%s answer=%s: %r", telegram_user_id, answer, e)
+        return None
+    from ..messages import (
+        SURVEY_ANSWER_CONFIRMATION,
+        SURVEY_ANSWER_CONFIRMATION_SETUP_HELP,
+    )
+    if answer == 1:
+        return SURVEY_ANSWER_CONFIRMATION_SETUP_HELP
+    return SURVEY_ANSWER_CONFIRMATION
+
 
 # --- Semantic FAQ match: ключевые слова для unclear → детерминированный ответ ---
 # Порядок проверки: более специфичные первыми (multi_device, speed, sites)
@@ -150,6 +207,30 @@ async def process_support_message(message: Message) -> Tuple[str, Optional[Inlin
     if not text or not user_id:
         meta["intent_source"] = "fallback"
         return get_safe_fallback(), None, meta
+
+    survey_reply = try_record_survey_answer(user_id, text)
+    if survey_reply is not None:
+        meta["intent"] = "survey_answer"
+        meta["action"] = "survey_answer"
+        try:
+            db.log_support_conversation(
+                telegram_user_id=user_id,
+                user_message=text,
+                ai_response=survey_reply[:500] if survey_reply else None,
+                detected_intent="survey_answer",
+                confidence=1.0,
+                mode="ai",
+                handoff_to_human=False,
+            )
+        except Exception as e:
+            log.warning("Failed to log support conversation (survey): %r", e)
+        text_for_log = (text or "").replace("\n", " ").replace("\r", " ").strip()[:300].replace('"', '\\"')
+        log.info(
+            "support_ai tg_id=%s intent=survey_answer conf=1.00 source=rule action=survey_answer fallback=False handoff=False resend=False vpn_diagnosis= vpn_symptom= text=\"%s\"",
+            user_id,
+            text_for_log,
+        )
+        return survey_reply, None, meta
 
     context = build_user_context(user_id)
     result = classify_intent(text, context)

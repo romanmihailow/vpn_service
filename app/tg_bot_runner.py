@@ -4280,6 +4280,11 @@ async def cmd_crm_report(message: Message) -> None:
         f"• напоминание через 24 часа: {r['no_handshake_24h']}\n"
         f"• напоминание через 5 дней: {r['no_handshake_5d']}\n"
         f"• опрос причины отказа: {r['no_handshake_survey']}\n\n"
+        "<b>Причины отказа:</b>\n"
+        f"• не разобрался с настройкой: {r.get('no_handshake_survey_answer_1', 0)}\n"
+        f"• пока не нужен: {r.get('no_handshake_survey_answer_2', 0)}\n"
+        f"• пользуюсь другим VPN: {r.get('no_handshake_survey_answer_3', 0)}\n"
+        f"• дорого: {r.get('no_handshake_survey_answer_4', 0)}\n\n"
         "<b>Прочее:</b>\n"
         f"• первые оплаты после handshake: {r['first_paid_with_prior_handshake']}\n"
     )

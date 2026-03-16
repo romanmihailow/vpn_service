@@ -1334,6 +1334,10 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
         "no_handshake_5d",
         "no_handshake_survey",
         "welcome_after_first_payment",
+        "no_handshake_survey_answer_1",
+        "no_handshake_survey_answer_2",
+        "no_handshake_survey_answer_3",
+        "no_handshake_survey_answer_4",
     ]
     result: Dict[str, Any] = {t: 0 for t in types}
     result["first_paid_with_prior_handshake"] = 0
@@ -1354,7 +1358,11 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_24h') AS no_handshake_24h,
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_5d') AS no_handshake_5d,
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey') AS no_handshake_survey,
-                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'welcome_after_first_payment') AS welcome_after_first_payment
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'welcome_after_first_payment') AS welcome_after_first_payment,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_1') AS no_handshake_survey_answer_1,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_2') AS no_handshake_survey_answer_2,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_3') AS no_handshake_survey_answer_3,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_4') AS no_handshake_survey_answer_4
                 FROM subscription_notifications
                 WHERE sent_at >= NOW() - (%s::text || ' days')::interval
                   AND notification_type = ANY(%s);
@@ -1375,6 +1383,10 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
                 result["no_handshake_5d"] = int(row[9] or 0)
                 result["no_handshake_survey"] = int(row[10] or 0)
                 result["welcome_after_first_payment"] = int(row[11] or 0)
+                result["no_handshake_survey_answer_1"] = int(row[12] or 0)
+                result["no_handshake_survey_answer_2"] = int(row[13] or 0)
+                result["no_handshake_survey_answer_3"] = int(row[14] or 0)
+                result["no_handshake_survey_answer_4"] = int(row[15] or 0)
 
             cur.execute(
                 """
@@ -1898,6 +1910,67 @@ def get_subscriptions_expiring_in_window(
             cur.execute(sql, (from_hours, to_hours))
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
+
+SURVEY_ANSWER_TYPES = (
+    "no_handshake_survey_answer_1",
+    "no_handshake_survey_answer_2",
+    "no_handshake_survey_answer_3",
+    "no_handshake_survey_answer_4",
+)
+
+
+def get_eligible_subscription_for_survey_answer(
+    telegram_user_id: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Подписка, для которой уже отправлен опрос (no_handshake_survey),
+    но ответ ещё не сохранён. Берётся последняя по времени отправки опроса.
+    """
+    sql = """
+    SELECT s.id, s.expires_at, s.telegram_user_id
+    FROM vpn_subscriptions s
+    JOIN subscription_notifications n_survey
+      ON n_survey.subscription_id = s.id
+     AND n_survey.notification_type = 'no_handshake_survey'
+    WHERE s.telegram_user_id = %s
+      AND NOT EXISTS (
+        SELECT 1 FROM subscription_notifications n_ans
+        WHERE n_ans.subscription_id = s.id
+          AND n_ans.notification_type IN (
+            'no_handshake_survey_answer_1', 'no_handshake_survey_answer_2',
+            'no_handshake_survey_answer_3', 'no_handshake_survey_answer_4'
+          )
+      )
+    ORDER BY n_survey.sent_at DESC
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
+def user_has_any_survey_answer(telegram_user_id: int) -> bool:
+    """True, если у пользователя есть хотя бы одна подписка с сохранённым ответом на опрос причины отказа."""
+    sql = """
+    SELECT 1 FROM subscription_notifications n
+    JOIN vpn_subscriptions s ON s.id = n.subscription_id
+    WHERE s.telegram_user_id = %s
+      AND n.notification_type IN (
+        'no_handshake_survey_answer_1', 'no_handshake_survey_answer_2',
+        'no_handshake_survey_answer_3', 'no_handshake_survey_answer_4'
+      )
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            row = cur.fetchone()
+    return row is not None
 
 
 def get_subscriptions_for_no_handshake_reminder(
