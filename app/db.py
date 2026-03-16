@@ -414,6 +414,26 @@ def get_support_conversation_intent_stats(hours: int = 24) -> List[Tuple[str, in
             return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+def get_support_conversation_handoff_by_intent(hours: int = 24) -> List[Tuple[str, int]]:
+    """
+    Возвращает (detected_intent, handoff_count) за последние hours часов.
+    Только записи с handoff_to_human = TRUE. Для /support_stats — блок «Проблемные интенты (по handoff)».
+    """
+    sql = """
+    SELECT detected_intent AS intent, COUNT(*) AS cnt
+    FROM support_conversations
+    WHERE created_at >= NOW() - (%s || ' hours')::interval
+      AND handoff_to_human = TRUE
+      AND detected_intent IS NOT NULL
+      AND detected_intent != ''
+    GROUP BY detected_intent;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (hours,))
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+
 def log_support_conversation(
     telegram_user_id: int,
     user_message: str,

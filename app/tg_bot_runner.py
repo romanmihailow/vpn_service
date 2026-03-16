@@ -4208,6 +4208,70 @@ def _parse_support_ai_log_for_stats(hours: int = 24) -> Tuple[Dict[str, int], Di
     return dict(source_counts), dict(vpn_diagnosis_counts)
 
 
+def _parse_support_ai_log_intent_fallback(hours: int = 24) -> Dict[str, int]:
+    """
+    Парсит support_ai.log за последние hours часов, считает по каждому intent
+    количество записей с fallback=True. Для /support_stats — блок «Проблемные интенты (по fallback)».
+    """
+    import re
+    fallback_by_intent: Dict[str, int] = defaultdict(int)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+    log_path = Path(SUPPORT_AI_LOG_FILE)
+    if not log_path.is_file():
+        return dict(fallback_by_intent)
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if "support_ai " not in line or "fallback=True" not in line:
+                    continue
+                parts = line.split(" - ", 2)
+                if len(parts) < 3:
+                    continue
+                try:
+                    ts_str = parts[0].strip()
+                    if "," in ts_str:
+                        ts_str = ts_str.split(",")[0]
+                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if dt < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    continue
+                msg = parts[2]
+                m = re.search(r"intent=(\S+)", msg)
+                if m:
+                    fallback_by_intent[m.group(1)] += 1
+    except Exception as e:
+        log.warning("[SupportStats] Log parse intent_fallback error: %r", e)
+    return dict(fallback_by_intent)
+
+
+# Русские подписи для /support_stats (только вывод, ключи и логика без изменений)
+SUPPORT_STATS_HEADER = "Статистика AI-поддержки (за 24 часа)"
+SUPPORT_STATS_BY_SOURCE = "По источнику ответа:"
+SUPPORT_STATS_TOP_INTENTS = "Популярные интенты:"
+SUPPORT_STATS_TOP_VPN = "Диагностика VPN:"
+SUPPORT_STATS_PROBLEM_HANDOFF = "Проблемные интенты (по handoff):"
+SUPPORT_STATS_PROBLEM_FALLBACK = "Проблемные интенты (по fallback):"
+SUPPORT_STATS_NONE = "(нет)"
+SUPPORT_STATS_INTENT_LABELS = {
+    "unclear": "не распознано",
+    "referral_info": "реферальная программа",
+    "connect_help": "помощь с подключением",
+    "subscription_status": "статус подписки",
+    "pricing_info": "тарифы и стоимость",
+    "missing_config_after_payment": "нет конфига после оплаты",
+    "privacy_policy": "персональные данные",
+    "smalltalk": "обычный разговор",
+    "referral_stats": "статистика рефералов",
+    "resend_config": "повторная отправка конфига",
+}
+SUPPORT_STATS_VPN_DIAG_LABELS = {
+    "handshake_ok": "VPN подключён (есть handshake)",
+}
+
+
 @router.message(Command("support_stats"))
 async def cmd_support_stats(message: Message) -> None:
     """Админ-команда: краткая статистика AI-support за последние 24ч (intents, source, vpn_diagnosis)."""
@@ -4218,26 +4282,63 @@ async def cmd_support_stats(message: Message) -> None:
     try:
         intent_rows = db.get_support_conversation_intent_stats(hours=24)
         source_counts, vpn_diagnosis_counts = _parse_support_ai_log_for_stats(hours=24)
+        handoff_rows = db.get_support_conversation_handoff_by_intent(hours=24)
+        fallback_by_intent = _parse_support_ai_log_intent_fallback(hours=24)
     except Exception as e:
         log.error("[SupportStats] Failed to get stats: %r", e)
         await message.answer("Не удалось получить статистику. См. логи.")
         return
 
-    lines = ["<b>AI SUPPORT STATS (last 24h)</b>\n"]
-    lines.append("<b>By source:</b>")
+    lines = [f"<b>{SUPPORT_STATS_HEADER}</b>\n"]
+    lines.append(f"<b>{SUPPORT_STATS_BY_SOURCE}</b>")
     for key in ("rule", "memory", "faq_match", "openai", "fallback"):
         lines.append(f"{key}: {source_counts.get(key, 0)}")
     lines.append("")
-    lines.append("<b>Top intents:</b>")
+    lines.append(f"<b>{SUPPORT_STATS_TOP_INTENTS}</b>")
     for intent, cnt in intent_rows[:10]:
-        lines.append(f"{intent}: {cnt}")
+        label = SUPPORT_STATS_INTENT_LABELS.get(intent, intent)
+        lines.append(f"{label}: {cnt}")
     lines.append("")
-    lines.append("<b>Top VPN diagnoses:</b>")
+    lines.append(f"<b>{SUPPORT_STATS_TOP_VPN}</b>")
     sorted_diag = sorted(vpn_diagnosis_counts.items(), key=lambda x: -x[1])[:10]
     for diag, cnt in sorted_diag:
-        lines.append(f"{diag}: {cnt}")
+        label = SUPPORT_STATS_VPN_DIAG_LABELS.get(diag, diag)
+        lines.append(f"{label}: {cnt}")
     if not sorted_diag:
-        lines.append("(none)")
+        lines.append(SUPPORT_STATS_NONE)
+
+    total_by_intent = {intent: cnt for intent, cnt in intent_rows}
+    handoff_map = dict(handoff_rows)
+    handoff_rates = [
+        (intent, total, handoff_map.get(intent, 0))
+        for intent, total in total_by_intent.items()
+        if total > 0
+    ]
+    handoff_rates.sort(key=lambda x: -round(x[2] * 100 / x[1]))
+    lines.append("")
+    lines.append(f"<b>{SUPPORT_STATS_PROBLEM_HANDOFF}</b>")
+    for intent, total, handoff in handoff_rates[:5]:
+        rate = round(handoff * 100 / total)
+        label = SUPPORT_STATS_INTENT_LABELS.get(intent, intent)
+        lines.append(f"• {label}: {total} / handoff {handoff} ({rate}%)")
+    if not handoff_rates:
+        lines.append(SUPPORT_STATS_NONE)
+
+    fallback_rates = [
+        (intent, total, fallback_by_intent.get(intent, 0))
+        for intent, total in total_by_intent.items()
+        if total > 0
+    ]
+    fallback_rates.sort(key=lambda x: -round(x[2] * 100 / x[1]))
+    lines.append("")
+    lines.append(f"<b>{SUPPORT_STATS_PROBLEM_FALLBACK}</b>")
+    for intent, total, fallback in fallback_rates[:5]:
+        rate = round(fallback * 100 / total)
+        label = SUPPORT_STATS_INTENT_LABELS.get(intent, intent)
+        lines.append(f"• {label}: {total} / fallback {fallback} ({rate}%)")
+    if not fallback_rates:
+        lines.append(SUPPORT_STATS_NONE)
+
     await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 

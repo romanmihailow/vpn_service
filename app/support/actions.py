@@ -10,6 +10,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .. import db, wg
 from ..bot import send_vpn_config_to_user
 from ..messages import (
+    AI_ASSISTANT_ONBOARDING_TEXT,
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     CONNECTION_INSTRUCTION_SHORT,
     HELP_INSTRUCTION,
@@ -248,14 +249,7 @@ def action_pricing_info() -> Tuple[str, InlineKeyboardMarkup]:
 
 def action_smalltalk() -> str:
     """Ответ на smalltalk (кто ты, привет и т.д.)."""
-    return (
-        "Я помощник MaxNet VPN.\n"
-        "Могу помочь:\n\n"
-        "• отправить конфиг\n"
-        "• проверить подписку\n"
-        "• помочь с подключением\n"
-        "• позвать оператора"
-    )
+    return AI_ASSISTANT_ONBOARDING_TEXT
 
 
 def _stale_keyboard(subscription_id: Any) -> InlineKeyboardMarkup:
