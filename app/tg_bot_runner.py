@@ -1056,10 +1056,20 @@ async def cmd_start(message: Message) -> None:
                 e,
             )
 
-    await message.answer(
-        START_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
-        reply_markup=get_start_keyboard(user.id if user else 0),
-    )
+    try:
+        reply_markup = get_start_keyboard(user.id if user else 0)
+        await message.answer(
+            START_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
+            reply_markup=reply_markup,
+        )
+    except Exception as e:
+        log.exception("[Start] Failed to send start reply tg_id=%s: %r", user.id if user else None, e)
+        try:
+            await message.answer(
+                START_TEXT + "\n\n" + SUPPORT_DISCOVERY_TEXT,
+            )
+        except Exception:
+            log.exception("[Start] Fallback answer also failed")
 
 
 @router.message(Command("help"))
