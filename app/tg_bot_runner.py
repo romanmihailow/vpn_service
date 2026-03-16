@@ -174,9 +174,11 @@ async def _send_admin_new_user_notification(
         ref_tg = ref_info.get("referrer_telegram_user_id")
         ref_name = ref_info.get("referrer_username")
         ref_display = fmt_ref_display(ref_name, ref_tg)
-        referred_count = int(ref_info.get("referred_count") or 0)
+        # Для «Новый пользователь» показываем ordinal (номер этого приглашённого), чтобы счётчик
+        # гарантированно включал текущего пользователя (избегаем рассинхрона 336/336)
+        display_count = int(ref_info.get("referral_ordinal") or ref_info.get("referred_count") or 0)
         paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
-        ref_line = f"Реферер: {ref_display} ({referred_count}/{paid_count})"
+        ref_line = f"Реферер: {ref_display} ({display_count}/{paid_count})"
     else:
         ref_line = "Реферер: —"
     text = (
