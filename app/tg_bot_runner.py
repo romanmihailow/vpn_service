@@ -1339,11 +1339,22 @@ async def cmd_subscription(message: Message) -> None:
 
     text = "\n".join(lines)
 
-    await message.answer(
-        text,
-        disable_web_page_preview=True,
-        reply_markup=SUBSCRIPTION_PAGE_KEYBOARD,
-    )
+    try:
+        await message.answer(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=SUBSCRIPTION_PAGE_KEYBOARD,
+        )
+    except Exception:
+        log.exception("[Subscription] Failed to send reply")
+        try:
+            await message.answer(
+                "Не удалось загрузить тарифы. "
+                "Попробуй ещё раз через минуту или напиши в поддержку.",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            log.exception("[Subscription] Fallback answer also failed")
 
 
 @router.callback_query(F.data == "subscription:open")
@@ -3719,11 +3730,21 @@ async def cmd_points(message: Message) -> None:
         lines.append("")
         lines.append("ℹ️ Баллы можно тратить на оплату подписки.")
         text = "\n".join(lines)
-        await message.answer(
-            text,
-            disable_web_page_preview=True,
-            reply_markup=POINTS_KEYBOARD,
-        )
+        try:
+            await message.answer(
+                text,
+                disable_web_page_preview=True,
+                reply_markup=POINTS_KEYBOARD,
+            )
+        except Exception:
+            log.exception("[Points] Failed to send reply (no transactions)")
+            try:
+                await message.answer(
+                    "Не удалось загрузить баланс. Попробуй ещё раз через минуту.",
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                log.exception("[Points] Fallback answer also failed")
         return
 
     now_utc = datetime.utcnow()
@@ -3814,11 +3835,21 @@ async def cmd_points(message: Message) -> None:
 
     text = "\n".join(lines)
 
-    await message.answer(
-        text,
-        disable_web_page_preview=True,
-        reply_markup=POINTS_KEYBOARD,
-    )
+    try:
+        await message.answer(
+            text,
+            disable_web_page_preview=True,
+            reply_markup=POINTS_KEYBOARD,
+        )
+    except Exception:
+        log.exception("[Points] Failed to send reply")
+        try:
+            await message.answer(
+                "Не удалось загрузить баланс. Попробуй ещё раз через минуту.",
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            log.exception("[Points] Fallback answer also failed")
 
 
 @router.message(PromoStates.waiting_for_code)
@@ -6819,6 +6850,8 @@ async def auto_revoke_unused_promo_points() -> None:
 
 
 NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы уведомления о handshake приходили быстрее
+# Максимум подписок за один прогон (снижает нагрузку на DB pool)
+HANDSHAKE_ADMIN_BATCH_SIZE = 20
 
 HANDSHAKE_USER_CONNECTED_TEXT = (
     "VPN подключён 👍\n\n"
@@ -6981,7 +7014,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                 paid_lines = []
                 to_notify = []
 
-                for sub in with_handshake:
+                for sub in with_handshake[:HANDSHAKE_ADMIN_BATCH_SIZE]:
                     sub_id = sub.get("id")
                     tg_id = sub.get("telegram_user_id")
                     username = sub.get("telegram_user_name")
