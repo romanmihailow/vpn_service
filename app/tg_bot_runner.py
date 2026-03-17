@@ -921,6 +921,7 @@ SUBSCRIPTION_RENEW_KEYBOARD = InlineKeyboardMarkup(
 )
 
 # Клавиатура для /status (упрощённая). sub_id в кнопке — гарантирует тот же конфиг, что в статусе.
+# Кнопки по одной на строку — чтобы не обрезались на мобильных.
 def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -935,6 +936,8 @@ def get_status_keyboard(sub_id: int) -> InlineKeyboardMarkup:
                     text="🔁 Продлить подписку",
                     callback_data="pay:open",
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text="🎮 Продлить баллами",
                     callback_data="points:open",
@@ -7526,6 +7529,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                                             text="📱 Получить настройки",
                                             callback_data=f"config:resend:{sub_id}",
                                         ),
+                                    ],
+                                    [
                                         InlineKeyboardButton(
                                             text=SUPPORT_BUTTON_TEXT,
                                             url=SUPPORT_URL,

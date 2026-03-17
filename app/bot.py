@@ -182,13 +182,15 @@ async def send_vpn_config_to_user(
                             text=CONFIG_CHECK_NOW_BUTTON_TEXT,
                             callback_data=f"config_check_now:{sub['id']}",
                         ),
-                        InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
                     ],
+                    [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
                     [
                         InlineKeyboardButton(
                             text=ONBOARDING_WG_YES_BUTTON,
                             callback_data=f"onboarding:wireguard_confirm:{sub_id}",
                         ),
+                    ],
+                    [
                         InlineKeyboardButton(
                             text=ONBOARDING_WG_DOWNLOAD_BUTTON,
                             callback_data="onboarding:wireguard_download",
