@@ -7328,6 +7328,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
         log.info("[HandshakeShortConfirm] Job already running in another instance")
         return
 
+    log.info("[ShortConfirm] job started")
     try:
         while True:
             try:
@@ -7335,6 +7336,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
                     interval_seconds=HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC,
                     max_age_seconds=HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC,
                 )
+                log.info("[ShortConfirm] candidates=%s", len(candidates))
                 for row in candidates[:HANDSHAKE_SHORT_CONFIRMATION_BATCH_SIZE]:
                     tg_id = row.get("telegram_user_id")
                     sub_id = row.get("subscription_id")
@@ -7352,6 +7354,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
                         reply_markup=support_kb,
                     )
                     if ok:
+                        log.info("[ShortConfirm] sent tg_id=%s sub_id=%s", tg_id, sub_id)
                         try:
                             db.create_subscription_notification(
                                 subscription_id=sub_id,
@@ -7359,15 +7362,11 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
                                 telegram_user_id=tg_id,
                                 expires_at=row.get("expires_at"),
                             )
-                        except Exception as e:
-                            log.warning(
-                                "[HandshakeShortConfirm] Failed to record sub_id=%s: %r",
-                                sub_id,
-                                e,
-                            )
+                        except Exception:
+                            log.exception("[ShortConfirm] failed to record sub_id=%s", sub_id)
                     await asyncio.sleep(1)
             except Exception as e:
-                log.error("[HandshakeShortConfirm] Unexpected error: %r", e)
+                log.exception("[ShortConfirm] unexpected error: %r", e)
 
             await asyncio.sleep(HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC)
 
