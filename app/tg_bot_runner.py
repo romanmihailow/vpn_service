@@ -30,10 +30,8 @@ from .bot import (
 from .messages import (
     CONFIG_CHECK_FAIL,
     CONFIG_CHECK_NOW_FAIL,
-    CONFIG_CHECK_NOW_OK,
     CONFIG_CHECK_NOW_UNKNOWN,
     CONFIG_CHECK_OPTIONS,
-    CONFIG_CHECK_SUCCESS,
     CONFIG_CHECK_NOW_BUTTON_TEXT,
     HANDSHAKE_SHORT_CONFIRMATION_TEXT,
     HELP_INSTRUCTION,
@@ -48,8 +46,8 @@ from .messages import (
     ONBOARDING_WG_DOWNLOAD_MESSAGE,
     MY_ID_RESPONSE_TEMPLATE,
     MY_ID_UNAVAILABLE,
+    get_post_vpn_message,
     PRICING_HEADER,
-    REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
     REF_LINK_WELCOME_TEXT,
     REF_TRIAL_BUTTON_TEXT,
     REF_TRIAL_CONFIG_CAPTION,
@@ -2975,16 +2973,10 @@ async def vpn_ok_callback(callback: CallbackQuery) -> None:
         return
 
     await callback.answer()
-    buy_kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="pay:open")],
-            [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data=f"ref:open_from_notify:{sub_id}")],
-        ]
-    )
     await callback.message.answer(
-        VPN_OK_ANSWER_TEXT,
+        get_post_vpn_message("success"),
         disable_web_page_preview=True,
-        reply_markup=buy_kb,
+        reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
     )
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -3331,7 +3323,11 @@ async def config_check_now_callback(callback: CallbackQuery) -> None:
         return
     if ts > 0:
         log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=ok", callback.from_user.id, sub_id)
-        await callback.message.answer(CONFIG_CHECK_NOW_OK)
+        await callback.message.answer(
+            get_post_vpn_message("success"),
+            disable_web_page_preview=True,
+            reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
+        )
     else:
         log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=no_handshake", callback.from_user.id, sub_id)
         support_kb = InlineKeyboardMarkup(
@@ -3359,7 +3355,11 @@ async def config_check_ok_callback(callback: CallbackQuery) -> None:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer(CONFIG_CHECK_SUCCESS)
+    await callback.message.answer(
+        get_post_vpn_message("success"),
+        disable_web_page_preview=True,
+        reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
+    )
     try:
         db.create_subscription_notification(
             subscription_id=sub_id,
@@ -3369,21 +3369,6 @@ async def config_check_ok_callback(callback: CallbackQuery) -> None:
         )
     except Exception as e:
         log.warning("[ConfigCheck] Failed to record config_check_ok sub_id=%s: %r", sub_id, e)
-
-    ref_kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="👥 Пригласить друга",
-                    callback_data=f"ref:open_from_notify:{sub_id}",
-                ),
-            ],
-        ]
-    )
-    await callback.message.answer(
-        REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS,
-        reply_markup=ref_kb,
-    )
     log.info("[ReferralPrompt] tg_id=%s source=config_check_ok", callback.from_user.id if callback.from_user else None)
 
 
@@ -6856,18 +6841,7 @@ NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы увед
 # Максимум подписок за один прогон (снижает нагрузку на DB pool)
 HANDSHAKE_ADMIN_BATCH_SIZE = 20
 
-HANDSHAKE_USER_CONNECTED_TEXT = (
-    "VPN подключён 👍\n\n"
-    "Соединение работает.\n\n"
-    "Пробный доступ активен 7 дней.\n\n"
-    "Чтобы VPN не отключился после теста,\n"
-    "можно закрепить доступ уже сейчас.\n\n"
-    "🔥 Самый популярный тариф\n"
-    "3 месяца — 270 ₽\n\n"
-    "Это на 30% дешевле помесячной оплаты."
-)
-
-# CTA-клавиатура под первым handshake-сообщением (upsell)
+# CTA-клавиатура под сообщением «VPN подключён» (get_post_vpn_message в messages.py)
 HANDSHAKE_USER_CONNECTED_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -6887,37 +6861,6 @@ HANDSHAKE_FOLLOWUP_10M_TEXT = (
     "Всё открывается нормально?\n\n"
     "Если что-то не работает или нужна помощь с настройкой — "
     "просто напишите сюда, поможем."
-)
-
-HANDSHAKE_FOLLOWUP_2H_TEXT = (
-    "Если VPN работает стабильно 👍\n\n"
-    "Можно закрепить доступ заранее, чтобы он не отключился\n"
-    "после тестового периода.\n\n"
-    "Самый популярный тариф:\n\n"
-    "• 3 месяца — 270 ₽\n\n"
-    "Это дешевле, чем оплачивать помесячно.\n\n"
-    "Оформить можно здесь:\n/buy"
-)
-
-HANDSHAKE_FOLLOWUP_24H_TEXT = (
-    "Если VPN оказался полезным, можно закрепить доступ, "
-    "чтобы он не отключился после тестового периода.\n\n"
-    "Самый популярный тариф:\n"
-    "• 3 месяца — 270 ₽\n\n"
-    "Это дешевле помесячной оплаты.\n\n"
-    "Оформить можно здесь:\n/buy"
-)
-
-VPN_OK_ANSWER_TEXT = (
-    "Отлично 👍\n\n"
-    "Рады, что всё работает.\n\n"
-    "Если VPN будет нужен на постоянной основе, можно закрепить доступ заранее, "
-    "чтобы он не отключился после теста.\n\n"
-    "Самый популярный тариф:\n"
-    "• 3 месяца — 270 ₽\n\n"
-    "Оформить можно здесь:\n/buy\n\n"
-    "Кстати, вы можете приглашать друзей и получать баллы. "
-    "Баллы можно тратить на оплату VPN."
 )
 
 SUPPORT_URL = "https://t.me/maxnet_vpn_support"
@@ -7030,7 +6973,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=tg_id,
-                            text=HANDSHAKE_USER_CONNECTED_TEXT,
+                            text=get_post_vpn_message("initial"),
                             disable_web_page_preview=True,
                             reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
                         )
@@ -7262,8 +7205,8 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
     try:
         FOLLOWUPS = [
             ("handshake_followup_10m", HANDSHAKE_FOLLOWUP_10M_TEXT, True),
-            ("handshake_followup_2h", HANDSHAKE_FOLLOWUP_2H_TEXT, False),
-            ("handshake_followup_24h", HANDSHAKE_FOLLOWUP_24H_TEXT, False),
+            ("handshake_followup_2h", get_post_vpn_message("followup"), False),
+            ("handshake_followup_24h", get_post_vpn_message("followup"), False),
             ("handshake_referral_nudge_3d", HANDSHAKE_REFERRAL_NUDGE_3D_TEXT, False),
         ]
         while True:

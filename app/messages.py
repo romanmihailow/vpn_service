@@ -257,22 +257,45 @@ AI_ASSISTANT_ONBOARDING_TEXT = (
 # === Post-config connection check (checkpoint) ===
 CONFIG_CHECK_MESSAGE = "Удалось подключиться к VPN?"
 
-CONFIG_CHECK_SUCCESS = (
-    "Отлично 👌\n\n"
-    "Если что-то понадобится позже — просто напишите мне."
+# Единое сообщение после успешного подключения VPN: контекстный интро + общий блок (тариф, CTA)
+POST_VPN_CONNECTED_INTROS = {
+    "initial": (
+        "VPN подключён 👍\n\n"
+        "Соединение работает стабильно.\n\n"
+        "Пробный доступ активен на 7 дней.\n\n"
+    ),
+    "success": (
+        "Отлично 👍\n\n"
+        "Рады, что всё работает.\n\n"
+    ),
+    "followup": (
+        "Если VPN работает стабильно 👍\n\n"
+        "Можно закрепить доступ заранее, чтобы он не отключился после тестового периода.\n\n"
+    ),
+}
+
+POST_VPN_CONNECTED_COMMON = (
+    "Чтобы VPN не отключился после теста, можно закрепить доступ уже сейчас.\n\n"
+    "🔥 Самый популярный тариф\n"
+    "3 месяца — 270 ₽\n\n"
+    "Это дешевле, чем платить помесячно (экономия 10%).\n\n"
+    "Оформить можно здесь:\n"
+    "/buy"
 )
+
+
+def get_post_vpn_message(context: str) -> str:
+    """
+    Текст после успешного подключения VPN.
+    context: "initial" (сразу после handshake), "success" (кнопка «всё работает»), "followup" (2h/24h).
+    """
+    intro = POST_VPN_CONNECTED_INTROS.get(context, POST_VPN_CONNECTED_INTROS["initial"])
+    return intro + POST_VPN_CONNECTED_COMMON
 
 # === Short confirmation follow-up (~60 сек после первого handshake-сообщения) ===
 HANDSHAKE_SHORT_CONFIRMATION_TEXT = (
     "Если всё открывается нормально — VPN настроен правильно 👍\n\n"
     "Если что-то не работает, нажми «🧑‍💻 Нужна помощь»."
-)
-
-# Реферальный призыв после подтверждения «Всё работает» в checkpoint
-REFERRAL_PROMPT_AFTER_CONNECTION_SUCCESS = (
-    "🎉 Отлично! VPN работает.\n\n"
-    "Кстати, можно получить бесплатные дни VPN.\n\n"
-    "Пригласи друзей по своей ссылке — и получай дни VPN на баланс."
 )
 
 CONFIG_CHECK_FAIL = "Понял. Что именно не получилось?"
