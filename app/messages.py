@@ -257,40 +257,56 @@ AI_ASSISTANT_ONBOARDING_TEXT = (
 # === Post-config connection check (checkpoint) ===
 CONFIG_CHECK_MESSAGE = "Удалось подключиться к VPN?"
 
-# Единое сообщение после успешного подключения VPN: контекстный интро + общий блок (тариф, CTA)
-POST_VPN_CONNECTED_INTROS = {
+# Единое сообщение после успешного подключения VPN: 5 контекстов (initial, success, status_ok, followup, followup_24h)
+POST_VPN_TARIFF_BLOCK = (
+    "🔥 Самый популярный тариф\n"
+    "3 месяца — 270 ₽\n\n"
+    "Экономия 30 ₽ (≈10%).\n\n"
+    "Оформить можно здесь:\n"
+    "/buy"
+)
+
+POST_VPN_CONNECTED_MESSAGES = {
     "initial": (
         "VPN подключён 👍\n\n"
         "Соединение работает стабильно.\n\n"
         "Пробный доступ активен на 7 дней.\n\n"
+        "Чтобы VPN не отключился после теста, можно закрепить доступ уже сейчас.\n\n"
+        + POST_VPN_TARIFF_BLOCK
     ),
     "success": (
         "Отлично 👍\n\n"
         "Рады, что всё работает.\n\n"
+        "Если VPN нужен на постоянной основе, можно закрепить доступ уже сейчас.\n\n"
+        + POST_VPN_TARIFF_BLOCK
+        + "\n\n"
+        "🤝 Кстати, можно приглашать друзей и получать баллы на оплату VPN."
+    ),
+    "status_ok": (
+        "VPN уже подключён ✅\n\n"
+        "Соединение установлено, всё работает."
     ),
     "followup": (
         "Если VPN работает стабильно 👍\n\n"
         "Можно закрепить доступ заранее, чтобы он не отключился после тестового периода.\n\n"
+        + POST_VPN_TARIFF_BLOCK
+    ),
+    "followup_24h": (
+        "Напоминаем 👍\n\n"
+        "Если VPN нужен и дальше, доступ можно закрепить заранее, чтобы он не отключился после теста.\n\n"
+        + POST_VPN_TARIFF_BLOCK
     ),
 }
-
-POST_VPN_CONNECTED_COMMON = (
-    "Чтобы VPN не отключился после теста, можно закрепить доступ уже сейчас.\n\n"
-    "🔥 Самый популярный тариф\n"
-    "3 месяца — 270 ₽\n\n"
-    "Это дешевле, чем платить помесячно (экономия 10%).\n\n"
-    "Оформить можно здесь:\n"
-    "/buy"
-)
 
 
 def get_post_vpn_message(context: str) -> str:
     """
     Текст после успешного подключения VPN.
-    context: "initial" (сразу после handshake), "success" (кнопка «всё работает»), "followup" (2h/24h).
+    context: "initial" | "success" | "status_ok" | "followup" | "followup_24h"
     """
-    intro = POST_VPN_CONNECTED_INTROS.get(context, POST_VPN_CONNECTED_INTROS["initial"])
-    return intro + POST_VPN_CONNECTED_COMMON
+    return POST_VPN_CONNECTED_MESSAGES.get(
+        context, POST_VPN_CONNECTED_MESSAGES["initial"]
+    )
 
 # === Short confirmation follow-up (~60 сек после первого handshake-сообщения) ===
 HANDSHAKE_SHORT_CONFIRMATION_TEXT = (

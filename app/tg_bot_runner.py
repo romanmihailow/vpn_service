@@ -2976,7 +2976,7 @@ async def vpn_ok_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         get_post_vpn_message("success"),
         disable_web_page_preview=True,
-        reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
+        reply_markup=_make_post_vpn_success_keyboard(sub_id),
     )
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -3324,9 +3324,9 @@ async def config_check_now_callback(callback: CallbackQuery) -> None:
     if ts > 0:
         log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=ok", callback.from_user.id, sub_id)
         await callback.message.answer(
-            get_post_vpn_message("success"),
+            get_post_vpn_message("status_ok"),
             disable_web_page_preview=True,
-            reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
+            reply_markup=POST_VPN_STATUS_OK_KEYBOARD,
         )
     else:
         log.info("[ConfigCheckNow] tg_id=%s sub_id=%s result=no_handshake", callback.from_user.id, sub_id)
@@ -3358,7 +3358,7 @@ async def config_check_ok_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         get_post_vpn_message("success"),
         disable_web_page_preview=True,
-        reply_markup=HANDSHAKE_USER_CONNECTED_KEYBOARD,
+        reply_markup=_make_post_vpn_success_keyboard(sub_id),
     )
     try:
         db.create_subscription_notification(
@@ -6841,7 +6841,8 @@ NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы увед
 # Максимум подписок за один прогон (снижает нагрузку на DB pool)
 HANDSHAKE_ADMIN_BATCH_SIZE = 20
 
-# CTA-клавиатура под сообщением «VPN подключён» (get_post_vpn_message в messages.py)
+# CTA-клавиатуры под post-connection сообщениями (get_post_vpn_message в messages.py)
+# initial: 2 кнопки
 HANDSHAKE_USER_CONNECTED_KEYBOARD = InlineKeyboardMarkup(
     inline_keyboard=[
         [
@@ -6855,6 +6856,65 @@ HANDSHAKE_USER_CONNECTED_KEYBOARD = InlineKeyboardMarkup(
         ],
     ]
 )
+
+# status_ok: короткий ответ, одна кнопка
+POST_VPN_STATUS_OK_KEYBOARD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="💎 Закрепить доступ — 270 ₽",
+                callback_data="pay:open",
+            ),
+        ],
+    ]
+)
+
+
+def _make_post_vpn_success_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+    """success: Закрепить + Пригласить друга + Все тарифы (referral nudge)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 Закрепить доступ — 270 ₽",
+                    callback_data="pay:open",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data=f"ref:open_from_notify:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="📅 Все тарифы", callback_data="pay:open"),
+            ],
+        ]
+    )
+
+
+def _make_post_vpn_followup_keyboard(sub_id: int) -> InlineKeyboardMarkup:
+    """followup / followup_24h: Закрепить + Пригласить друга + Нужна помощь."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💎 Закрепить доступ — 270 ₽",
+                    callback_data="pay:open",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data=f"ref:open_from_notify:{sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL),
+            ],
+        ]
+    )
+
 
 HANDSHAKE_FOLLOWUP_10M_TEXT = (
     "VPN подключён 👍\n\n"
@@ -6887,14 +6947,6 @@ HANDSHAKE_REFERRAL_NUDGE_3D_TEXT = (
     "за каждого пользователя.\n\n"
     "Бонусами можно продлевать VPN бесплатно.\n\n"
     "Получить свою ссылку:\n/ref"
-)
-
-HANDSHAKE_FOLLOWUP_2H_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [InlineKeyboardButton(text="🛒 Закрепить доступ", callback_data="pay:open")],
-        [InlineKeyboardButton(text="🤝 Пригласить друга", callback_data="ref:open_from_notify")],
-        [InlineKeyboardButton(text=SUPPORT_BUTTON_TEXT, url=SUPPORT_URL)],
-    ]
 )
 
 NO_HANDSHAKE_SURVEY_TEXT = (
@@ -7222,7 +7274,9 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                         if has_buttons:
                             kwargs["reply_markup"] = _make_10m_keyboard(sub_id)
                         elif followup_type == "handshake_followup_2h":
-                            kwargs["reply_markup"] = HANDSHAKE_FOLLOWUP_2H_KEYBOARD
+                            kwargs["reply_markup"] = _make_post_vpn_followup_keyboard(sub_id)
+                        elif followup_type == "handshake_followup_24h":
+                            kwargs["reply_markup"] = _make_post_vpn_followup_keyboard(sub_id)
                         elif followup_type == "handshake_referral_nudge_3d":
                             kwargs["reply_markup"] = _make_ref_nudge_keyboard(sub_id)
                         ok = await safe_send_message(
