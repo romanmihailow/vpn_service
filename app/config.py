@@ -31,6 +31,9 @@ class Settings(BaseModel):
     DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION: int = int(
         os.getenv("DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION", "2010")
     )
+    ENABLE_HANDSHAKE_SHORT_CONFIRMATION: bool = (
+        os.getenv("ENABLE_HANDSHAKE_SHORT_CONFIRMATION", "0") in ("1", "true", "True")
+    )
 
     WG_INTERFACE_NAME: str = os.getenv("WG_INTERFACE_NAME", "wg0")
     WG_SERVER_PUBLIC_KEY: str = os.getenv("WG_SERVER_PUBLIC_KEY", "")

@@ -7812,9 +7812,8 @@ async def main() -> None:
     asyncio.create_task(auto_revoke_unused_promo_points())
     asyncio.create_task(auto_new_handshake_admin_notification(bot))
     asyncio.create_task(auto_handshake_followup_notifications(bot))
-    # Temporarily disabled due to DB pool exhaustion incident (2026-03-16).
-    # Will be re-enabled after pool stabilization and additional batching.
-    # asyncio.create_task(auto_handshake_short_confirmation(bot))
+    if settings.ENABLE_HANDSHAKE_SHORT_CONFIRMATION:
+        asyncio.create_task(auto_handshake_short_confirmation(bot))
     asyncio.create_task(auto_welcome_after_first_payment(bot))
     asyncio.create_task(auto_no_handshake_reminder(bot))
     asyncio.create_task(auto_config_checkpoint(bot))
