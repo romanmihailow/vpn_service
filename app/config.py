@@ -31,6 +31,9 @@ class Settings(BaseModel):
     DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION: int = int(
         os.getenv("DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION", "2010")
     )
+    DB_JOB_LOCK_REFERRAL_DAILY_SUMMARY: int = int(
+        os.getenv("DB_JOB_LOCK_REFERRAL_DAILY_SUMMARY", "2011")
+    )
     ENABLE_HANDSHAKE_SHORT_CONFIRMATION: bool = (
         os.getenv("ENABLE_HANDSHAKE_SHORT_CONFIRMATION", "0") in ("1", "true", "True")
     )

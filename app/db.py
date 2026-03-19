@@ -354,7 +354,18 @@ def init_db() -> None:
         ON support_conversations (telegram_user_id);
     CREATE INDEX IF NOT EXISTS idx_support_conversations_created
         ON support_conversations (created_at DESC);
+
+    --------------------------------------------------------------------
+    -- Реферальный ежедневный дайджест (уровень 2+): факт отправки
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS referral_daily_summary_sent (
+        telegram_user_id BIGINT NOT NULL,
+        sent_date DATE NOT NULL,
+        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (telegram_user_id, sent_date)
+    );
     """
+
 
 
 
@@ -1447,7 +1458,104 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
             if row:
                 result["first_paid_with_prior_handshake"] = int(row[0] or 0)
 
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM referral_daily_summary_sent
+                WHERE sent_at >= NOW() - (%s::text || ' days')::interval;
+                """,
+                (days,),
+            )
+            row = cur.fetchone()
+            if row:
+                result["referral_daily_summary"] = int(row[0] or 0)
+            else:
+                result["referral_daily_summary"] = 0
+
     return result
+
+
+def has_referral_daily_summary_sent_today(telegram_user_id: int) -> bool:
+    """Проверяет, отправляли ли уже referral_daily_summary этому пользователю сегодня."""
+    sql = """
+    SELECT 1 FROM referral_daily_summary_sent
+    WHERE telegram_user_id = %s AND sent_date = CURRENT_DATE
+    LIMIT 1;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+            return cur.fetchone() is not None
+
+
+def get_referral_daily_summary_candidates() -> List[Dict[str, Any]]:
+    """
+    Рефереры с активностью уровня 2+ за последние 24 часа, которым ещё не отправляли дайджест сегодня.
+    Возвращает список: telegram_user_id, connected_count, payments_count, points_sum.
+    """
+    sql = """
+    WITH level2_referrers AS (
+        SELECT r1.referrer_telegram_user_id AS top_ref, r2.referred_telegram_user_id AS l2_user
+        FROM referrals r1
+        JOIN referrals r2 ON r2.referrer_telegram_user_id = r1.referred_telegram_user_id
+    ),
+    connected AS (
+        SELECT l.top_ref, COUNT(DISTINCT n.subscription_id) AS cnt
+        FROM level2_referrers l
+        JOIN vpn_subscriptions s ON s.telegram_user_id = l.l2_user
+        JOIN subscription_notifications n ON n.subscription_id = s.id
+            AND n.notification_type = 'referral_user_connected'
+            AND n.sent_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY l.top_ref
+    ),
+    payments AS (
+        SELECT l.top_ref, COUNT(DISTINCT n.subscription_id) AS cnt
+        FROM level2_referrers l
+        JOIN vpn_subscriptions s ON s.telegram_user_id = l.l2_user
+        JOIN subscription_notifications n ON n.subscription_id = s.id
+            AND n.notification_type = 'referral_points_awarded'
+            AND n.sent_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY l.top_ref
+    ),
+    points AS (
+        SELECT telegram_user_id AS top_ref, COALESCE(SUM(delta), 0)::BIGINT AS pts
+        FROM user_points_transactions
+        WHERE reason LIKE 'ref_level_%%' AND level >= 2
+          AND created_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY telegram_user_id
+    ),
+    sent_today AS (
+        SELECT telegram_user_id FROM referral_daily_summary_sent WHERE sent_date = CURRENT_DATE
+    )
+    SELECT DISTINCT l.top_ref,
+           COALESCE(c.cnt, 0)::BIGINT AS connected_count,
+           COALESCE(p.cnt, 0)::BIGINT AS payments_count,
+           COALESCE(pt.pts, 0)::BIGINT AS points_sum
+    FROM level2_referrers l
+    LEFT JOIN connected c ON c.top_ref = l.top_ref
+    LEFT JOIN payments p ON p.top_ref = l.top_ref
+    LEFT JOIN points pt ON pt.top_ref = l.top_ref
+    WHERE NOT EXISTS (SELECT 1 FROM sent_today s WHERE s.telegram_user_id = l.top_ref)
+      AND (COALESCE(c.cnt, 0) > 0 OR COALESCE(p.cnt, 0) > 0);
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return [dict(r) for r in rows] if rows else []
+
+
+def create_referral_daily_summary_sent(telegram_user_id: int) -> None:
+    """Фиксирует отправку referral_daily_summary пользователю сегодня (идемпотентно по PK)."""
+    sql = """
+    INSERT INTO referral_daily_summary_sent (telegram_user_id, sent_date, sent_at)
+    VALUES (%s, CURRENT_DATE, NOW())
+    ON CONFLICT (telegram_user_id, sent_date) DO NOTHING;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+        conn.commit()
 
 
 def get_latest_subscription_for_telegram(

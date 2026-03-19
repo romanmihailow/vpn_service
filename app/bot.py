@@ -294,6 +294,35 @@ REFERRAL_POINTS_AWARDED_TEXT = (
 )
 
 
+def _format_referral_daily_summary_text(
+    connected_count: int,
+    payments_count: int,
+    points_sum: int,
+) -> str:
+    """Текст ежедневного дайджеста по сети уровня 2+."""
+    return (
+        "🔥 Обновление по вашей сети\n\n"
+        f"+{connected_count} подключений\n"
+        f"+{payments_count} оплат\n"
+        f"+{points_sum} баллов начислено\n\n"
+        "Продолжай делиться — это работает 👍"
+    )
+
+
+def _make_referral_daily_summary_keyboard() -> InlineKeyboardMarkup:
+    """Одна кнопка «Пригласить друга» для дайджеста (ref:open_from_referral:summary)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data="ref:open_from_referral:summary",
+                ),
+            ],
+        ]
+    )
+
+
 def _make_referral_user_connected_keyboard(referred_sub_id: int) -> InlineKeyboardMarkup:
     """Одна кнопка «Пригласить друга» с контекстом для tracking."""
     return InlineKeyboardMarkup(
@@ -361,6 +390,32 @@ async def send_referral_points_awarded_notification(
             chat_id=referrer_telegram_id,
             text=REFERRAL_POINTS_AWARDED_TEXT,
             reply_markup=_make_referral_points_awarded_keyboard(referred_sub_id),
+        )
+    finally:
+        await bot.session.close()
+
+
+async def send_referral_daily_summary_notification(
+    telegram_user_id: int,
+    connected_count: int,
+    payments_count: int,
+    points_sum: int,
+) -> None:
+    """
+    Ежедневный дайджест по сети уровня 2+: подключения, оплаты, баллы.
+    Кнопка: ref:open_from_referral:summary.
+    """
+    text = _format_referral_daily_summary_text(
+        connected_count=connected_count,
+        payments_count=payments_count,
+        points_sum=points_sum,
+    )
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+            reply_markup=_make_referral_daily_summary_keyboard(),
         )
     finally:
         await bot.session.close()
