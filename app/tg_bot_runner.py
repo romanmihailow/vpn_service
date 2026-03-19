@@ -27,6 +27,7 @@ from .bot import (
     send_config_checkpoint_message,
     send_trial_expired_paid_notification,
     send_referral_user_connected_notification,
+    send_referral_daily_summary_notification,
 )
 from .messages import (
     CONFIG_CHECK_FAIL,
@@ -3242,9 +3243,9 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("ref:open_from_referral:"))
 async def ref_open_from_referral_callback(callback: CallbackQuery) -> None:
     """
-    Кнопки из реферальных уведомлений (connected / points).
-    Формат: ref:open_from_referral:connected:{referred_sub_id} или ref:open_from_referral:points:{referred_sub_id}.
-    Открывает тот же referral flow, записывает клик для CRM.
+    Кнопки из реферальных уведомлений (connected / points / summary).
+    Формат: ref:open_from_referral:connected:{id}, ref:open_from_referral:points:{id}, ref:open_from_referral:summary.
+    Открывает тот же referral flow; для connected/points записывает клик для CRM.
     """
     user = callback.from_user
     if user is None:
@@ -3255,11 +3256,53 @@ async def ref_open_from_referral_callback(callback: CallbackQuery) -> None:
     username = user.username
     data = callback.data or ""
     parts = data.split(":")
-    # ref, open_from_referral, context, referred_sub_id
+    context = parts[2] if len(parts) >= 3 else ""
+
+    # summary: без sub_id, без tracking — только показать ref flow
+    if context == "summary":
+        try:
+            info = db.get_or_create_referral_info(
+                telegram_user_id=telegram_user_id,
+                telegram_username=username,
+            )
+        except Exception as e:
+            log.error("[Referral] Failed to get referral info (summary) tg_id=%s: %r", telegram_user_id, e)
+            await callback.answer("Ошибка, попробуй позже.", show_alert=True)
+            return
+        ref_code = info.get("ref_code")
+        try:
+            me = await callback.bot.get_me()
+            bot_username = me.username
+        except Exception as e:
+            log.error("[Referral] Failed to get bot username (summary) tg_id=%s: %r", telegram_user_id, e)
+            bot_username = None
+        if bot_username and ref_code:
+            deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+        elif ref_code:
+            deep_link = f"/start {ref_code}"
+        else:
+            deep_link = None
+        if not deep_link:
+            await callback.message.answer(
+                "Не удалось сформировать реферальную ссылку. Попробуй написать /ref или обратись в поддержку.",
+                disable_web_page_preview=True,
+            )
+            await callback.answer()
+            return
+        text = (
+            "🤝 Пригласи друга и продли подписку дешевле.\n\n"
+            "Отправь эту ссылку другу. Когда он подключится и оплатит подписку, "
+            "ты получишь баллы по реферальной программе:\n\n"
+            f"<a href=\"{deep_link}\">{deep_link}</a>"
+        )
+        await callback.message.answer(text, disable_web_page_preview=True)
+        await callback.answer("Ссылку можно переслать другу.")
+        return
+
+    # connected / points: нужен referred_sub_id и tracking
     if len(parts) < 4:
         await callback.answer("Ошибка данных кнопки.", show_alert=True)
         return
-    context = parts[2]  # "connected" или "points"
     try:
         referred_sub_id = int(parts[3])
     except (ValueError, TypeError):
@@ -3271,7 +3314,6 @@ async def ref_open_from_referral_callback(callback: CallbackQuery) -> None:
         await callback.answer("Подписка не найдена.", show_alert=True)
         return
 
-    # Tracking: один раз на (subscription_id, notification_type)
     if context == "connected":
         click_type = "referral_user_connected_ref_clicked"
     elif context == "points":
@@ -4702,6 +4744,15 @@ async def cmd_crm_report(message: Message) -> None:
     if r["handshake_referral_nudge_3d"] > 0:
         ref_pct = f" ({100 * r['ref_nudge_clicked'] // r['handshake_referral_nudge_3d']}%)"
 
+    ref_connected_pct = ""
+    if r.get("referral_user_connected", 0) > 0:
+        ref_connected_pct = f" ({100 * r.get('referral_user_connected_ref_clicked', 0) // r['referral_user_connected']}%)"
+    ref_points_pay_pct = ""
+    ref_points_ref_pct = ""
+    if r.get("referral_points_awarded", 0) > 0:
+        ref_points_pay_pct = f" ({100 * r.get('referral_points_awarded_pay_clicked', 0) // r['referral_points_awarded']}%)"
+        ref_points_ref_pct = f" ({100 * r.get('referral_points_awarded_ref_clicked', 0) // r['referral_points_awarded']}%)"
+
     text = (
         f"<b>CRM-отчёт за {days} дней</b>\n\n"
         "<b>Оплаты:</b>\n"
@@ -4731,10 +4782,12 @@ async def cmd_crm_report(message: Message) -> None:
         f"• дорого: {r.get('no_handshake_survey_answer_4', 0)}\n\n"
         "<b>Реферальные уведомления:</b>\n"
         f"• уведомление «пользователь подключился»: {r.get('referral_user_connected', 0)}\n"
-        f"• нажали «Пригласить друга»: {r.get('referral_user_connected_ref_clicked', 0)}{f\" ({100 * r.get('referral_user_connected_ref_clicked', 0) // r['referral_user_connected']}%)\" if r.get('referral_user_connected', 0) else ''}\n\n"
+        f"• нажали «Пригласить друга»: {r.get('referral_user_connected_ref_clicked', 0)}{ref_connected_pct}\n\n"
         f"• уведомление «начислены баллы»: {r.get('referral_points_awarded', 0)}\n"
-        f"• нажали «Оплатить баллами»: {r.get('referral_points_awarded_pay_clicked', 0)}{f\" ({100 * r.get('referral_points_awarded_pay_clicked', 0) // r['referral_points_awarded']}%)\" if r.get('referral_points_awarded', 0) else ''}\n"
-        f"• нажали «Пригласить друга»: {r.get('referral_points_awarded_ref_clicked', 0)}{f\" ({100 * r.get('referral_points_awarded_ref_clicked', 0) // r['referral_points_awarded']}%)\" if r.get('referral_points_awarded', 0) else ''}\n\n"
+        f"• нажали «Оплатить баллами»: {r.get('referral_points_awarded_pay_clicked', 0)}{ref_points_pay_pct}\n"
+        f"• нажали «Пригласить друга»: {r.get('referral_points_awarded_ref_clicked', 0)}{ref_points_ref_pct}\n\n"
+        "<b>Реферальные дайджесты:</b>\n"
+        f"• отправлено: {r.get('referral_daily_summary', 0)}\n\n"
         "<b>Прочее:</b>\n"
         f"• первые оплаты после handshake: {r['first_paid_with_prior_handshake']}\n"
     )
@@ -6681,7 +6734,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
     - не шлём уведомления ночью (по UTC: только 09–22);
     - добавляем inline-клавиатуру SUBSCRIPTION_RENEW_KEYBOARD.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NOTIFY_EXPIRING):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_NOTIFY_EXPIRING):
         log.info("[AutoNotify] Job already running in another instance")
         return
 
@@ -6701,7 +6754,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                 batch_count = 0
 
                 # --- Напоминание за 3 дня до окончания ---
-                subs_3d = db.get_subscriptions_expiring_in_window(60, 73)
+                subs_3d = await asyncio.to_thread(db.get_subscriptions_expiring_in_window, 60, 73)
                 for sub in subs_3d:
                     sub_id = sub.get("id")
                     telegram_user_id = sub.get("telegram_user_id")
@@ -6710,7 +6763,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     if not sub_id or not telegram_user_id:
                         continue
 
-                    if db.has_subscription_notification(
+                    if await asyncio.to_thread(
+                        db.has_subscription_notification,
                         sub_id,
                         "expires_3d",
                         telegram_user_id=telegram_user_id,
@@ -6732,7 +6786,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
-                    db.create_subscription_notification(
+                    await asyncio.to_thread(
+                        db.create_subscription_notification,
                         subscription_id=sub_id,
                         notification_type="expires_3d",
                         telegram_user_id=telegram_user_id,
@@ -6751,7 +6806,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         batch_count = 0
 
                 # --- Напоминание за 1 день до окончания ---
-                subs_1d = db.get_subscriptions_expiring_in_window(12, 25)
+                subs_1d = await asyncio.to_thread(db.get_subscriptions_expiring_in_window, 12, 25)
                 for sub in subs_1d:
                     sub_id = sub.get("id")
                     telegram_user_id = sub.get("telegram_user_id")
@@ -6760,7 +6815,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     if not sub_id or not telegram_user_id:
                         continue
 
-                    if db.has_subscription_notification(
+                    if await asyncio.to_thread(
+                        db.has_subscription_notification,
                         sub_id,
                         "expires_1d",
                         telegram_user_id=telegram_user_id,
@@ -6782,7 +6838,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                         reply_markup=SUBSCRIPTION_RENEW_KEYBOARD,
                         disable_web_page_preview=True,
                     )
-                    db.create_subscription_notification(
+                    await asyncio.to_thread(
+                        db.create_subscription_notification,
                         subscription_id=sub_id,
                         notification_type="expires_1d",
                         telegram_user_id=telegram_user_id,
@@ -6802,7 +6859,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
 
                 # --- Напоминание за 1 час до окончания ---
                 # Окно примерно от 1 до 2 часов до окончания (как и выше — в "часах", а не минутах)
-                subs_1h = db.get_subscriptions_expiring_in_window(1, 2)
+                subs_1h = await asyncio.to_thread(db.get_subscriptions_expiring_in_window, 1, 2)
                 for sub in subs_1h:
                     sub_id = sub.get("id")
                     telegram_user_id = sub.get("telegram_user_id")
@@ -6811,7 +6868,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                     if not sub_id or not telegram_user_id:
                         continue
 
-                    if db.has_subscription_notification(
+                    if await asyncio.to_thread(
+                        db.has_subscription_notification,
                         sub_id,
                         "expires_1h",
                         telegram_user_id=telegram_user_id,
@@ -6826,7 +6884,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                             telegram_user_id=telegram_user_id,
                         )
 
-                        db.create_subscription_notification(
+                        await asyncio.to_thread(
+                            db.create_subscription_notification,
                             subscription_id=sub_id,
                             notification_type="expires_1h",
                             telegram_user_id=telegram_user_id,
@@ -6852,7 +6911,8 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
                             e,
                         )
                         # Записываем, чтобы не повторять попытки (бот заблокирован и т.п.)
-                        db.create_subscription_notification(
+                        await asyncio.to_thread(
+                            db.create_subscription_notification,
                             subscription_id=sub_id,
                             notification_type="expires_1h",
                             telegram_user_id=telegram_user_id,
@@ -6873,7 +6933,7 @@ async def auto_notify_expiring_subscriptions(bot: Bot) -> None:
             # Проверяем примерно раз в 10 минут
             await asyncio.sleep(600)
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_NOTIFY_EXPIRING)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_NOTIFY_EXPIRING)
 
 
 async def auto_deactivate_expired_subscriptions() -> None:
@@ -6883,14 +6943,14 @@ async def auto_deactivate_expired_subscriptions() -> None:
     (Уведомление пользователю об окончании теперь отправляется заранее —
     за ~1 час до окончания в auto_notify_expiring_subscriptions.)
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED):
         log.info("[AutoExpire] Job already running in another instance")
         return
 
     try:
         while True:
             try:
-                expired_subs = db.get_expired_active_subscriptions()
+                expired_subs = await asyncio.to_thread(db.get_expired_active_subscriptions)
                 for sub in expired_subs:
                     sub_id = sub.get("id")
                     pub_key = sub.get("wg_public_key")
@@ -6899,7 +6959,8 @@ async def auto_deactivate_expired_subscriptions() -> None:
                         continue
 
                     # помечаем неактивной в базе
-                    deactivated = db.deactivate_subscription_by_id(
+                    deactivated = await asyncio.to_thread(
+                        db.deactivate_subscription_by_id,
                         sub_id=sub_id,
                         event_name="auto_expire",
                     )
@@ -6914,7 +6975,7 @@ async def auto_deactivate_expired_subscriptions() -> None:
                                 pub_key,
                                 sub_id,
                             )
-                            wg.remove_peer(pub_key)
+                            await asyncio.to_thread(wg.remove_peer, pub_key)
                         except Exception as e:
                             log.error(
                                 "[AutoExpire] Failed to remove peer from WireGuard for sub_id=%s: %s",
@@ -6933,7 +6994,7 @@ async def auto_deactivate_expired_subscriptions() -> None:
             # Проверяем раз в 60 секунд (можешь настроить под себя)
             await asyncio.sleep(60)
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_DEACTIVATE_EXPIRED)
 
 
 # Отзыв неиспользованных промо-баллов (например never_connected_100) через N дней
@@ -6950,14 +7011,15 @@ async def auto_revoke_unused_promo_points() -> None:
     по кампании never_connected_100 и которые так и не потратили баллы.
     Списывает у них 100 баллов (отзыв неиспользованного бонуса).
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO):
         log.info("[RevokePromo] Job already running in another instance")
         return
 
     try:
         while True:
             try:
-                users = db.get_users_with_unused_promo_to_revoke(
+                users = await asyncio.to_thread(
+                    db.get_users_with_unused_promo_to_revoke,
                     campaign=REVOKE_UNUSED_PROMO_CAMPAIGN,
                     after_days=REVOKE_UNUSED_PROMO_AFTER_DAYS,
                     min_balance_to_revoke=REVOKE_UNUSED_PROMO_POINTS,
@@ -6966,7 +7028,8 @@ async def auto_revoke_unused_promo_points() -> None:
                     uid = row.get("telegram_user_id")
                     if not uid:
                         continue
-                    res = db.add_points(
+                    res = await asyncio.to_thread(
+                        db.add_points,
                         uid,
                         -REVOKE_UNUSED_PROMO_POINTS,
                         REVOKE_REASON,
@@ -7001,7 +7064,7 @@ async def auto_revoke_unused_promo_points() -> None:
             # Проверяем раз в 24 часа
             await asyncio.sleep(86400)
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_REVOKE_UNUSED_PROMO)
 
 
 NEW_HANDSHAKE_ADMIN_INTERVAL_SEC = 120  # 2 минуты — чтобы уведомления о handshake приходили быстрее
@@ -7134,7 +7197,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
     Раз в 10 минут проверяет подписки (триал/промо), у которых появился handshake,
     и отправляет админу одно сводное уведомление.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN):
         log.info("[NewHandshakeAdmin] Job already running in another instance")
         return
 
@@ -7148,19 +7211,13 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
 
                 handshakes = {}
                 try:
-                    if hasattr(asyncio, "to_thread"):
-                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
-                    else:
-                        loop = asyncio.get_running_loop()
-                        handshakes = await loop.run_in_executor(
-                            None, wg.get_handshake_timestamps
-                        )
+                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
                 except Exception as e:
                     log.warning("[NewHandshakeAdmin] Failed to get handshakes: %r", e)
                     await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
                     continue
 
-                subs = db.get_subscriptions_for_new_handshake_admin()
+                subs = await asyncio.to_thread(db.get_subscriptions_for_new_handshake_admin)
                 with_handshake = []
                 for sub in subs:
                     pk = (sub.get("wg_public_key") or "").strip()
@@ -7188,7 +7245,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                     event = sub.get("last_event_name") or ""
 
                     # Уведомление пользователю при первом handshake (CTA-кнопки для upsell)
-                    if tg_id and not db.has_subscription_notification(sub_id, "handshake_user_connected"):
+                    if tg_id and not await asyncio.to_thread(db.has_subscription_notification, sub_id, "handshake_user_connected"):
                         ok = await safe_send_message(
                             bot=bot,
                             chat_id=tg_id,
@@ -7198,7 +7255,8 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         )
                         if ok:
                             try:
-                                db.create_subscription_notification(
+                                await asyncio.to_thread(
+                                    db.create_subscription_notification,
                                     subscription_id=sub_id,
                                     notification_type="handshake_user_connected",
                                     telegram_user_id=tg_id,
@@ -7212,13 +7270,14 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                                 )
                             # Уведомление рефереру: приведённый подключился (один раз на подписку)
                             try:
-                                referrer_id = db.get_referrer_telegram_id(tg_id)
-                                if referrer_id and not db.has_subscription_notification(sub_id, "referral_user_connected"):
+                                referrer_id = await asyncio.to_thread(db.get_referrer_telegram_id, tg_id)
+                                if referrer_id and not await asyncio.to_thread(db.has_subscription_notification, sub_id, "referral_user_connected"):
                                     await send_referral_user_connected_notification(
                                         referrer_telegram_id=referrer_id,
                                         referred_sub_id=sub_id,
                                     )
-                                    db.create_subscription_notification(
+                                    await asyncio.to_thread(
+                                        db.create_subscription_notification,
                                         subscription_id=sub_id,
                                         notification_type="referral_user_connected",
                                         telegram_user_id=referrer_id,
@@ -7233,20 +7292,20 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                         await asyncio.sleep(1)
 
                     if event == "referral_free_trial_7d":
-                        ref_info = db.get_referrer_with_count(tg_id)
+                        ref_info = await asyncio.to_thread(db.get_referrer_with_count, tg_id)
                         if ref_info:
                             ref_tg = ref_info.get("referrer_telegram_user_id")
                             ref_name = ref_info.get("referrer_username")
                             ref_display = fmt_ref_display(ref_name, ref_tg)
                             referred_count = int(ref_info.get("referred_count") or 0)
-                            paid_count = db.count_referrer_paid_referrals(ref_info["referrer_telegram_user_id"])
+                            paid_count = await asyncio.to_thread(db.count_referrer_paid_referrals, ref_info["referrer_telegram_user_id"])
                             trial_lines.append(
                                 f"• {user_line} | Реферер {ref_display} ({referred_count}/{paid_count}) | До: {expires_str}"
                             )
                         else:
                             trial_lines.append(f"• {user_line} | До: {expires_str}")
                     elif event.startswith("promo"):
-                        promo_info = db.get_promo_info_for_subscription(sub_id)
+                        promo_info = await asyncio.to_thread(db.get_promo_info_for_subscription, sub_id)
                         code = promo_info.get("code", "?") if promo_info else "?"
                         promo_lines.append(f"• {user_line} | {code} | До: {expires_str}")
                     else:
@@ -7320,7 +7379,8 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                 if all_ok:
                     for sub_id, tg_id, exp in to_notify:
                         try:
-                            db.create_subscription_notification(
+                            await asyncio.to_thread(
+                                db.create_subscription_notification,
                                 subscription_id=sub_id,
                                 notification_type="new_handshake_admin",
                                 telegram_user_id=tg_id,
@@ -7350,7 +7410,7 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
             await asyncio.sleep(NEW_HANDSHAKE_ADMIN_INTERVAL_SEC)
 
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_NEW_HANDSHAKE_ADMIN)
 
 
 async def auto_welcome_after_first_payment(bot: Bot) -> None:
@@ -7358,14 +7418,14 @@ async def auto_welcome_after_first_payment(bot: Bot) -> None:
     Отправляет welcome-сообщение после первой оплаты (ЮKassa/Heleket).
     Без баллов. Запись notification только после успешной отправки.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT):
         log.info("[WelcomeFirstPayment] Job already running in another instance")
         return
 
     try:
         while True:
             try:
-                candidates = db.get_subscriptions_for_welcome_after_first_payment()
+                candidates = await asyncio.to_thread(db.get_subscriptions_for_welcome_after_first_payment)
                 for row in candidates:
                     sub_id = row.get("subscription_id")
                     tg_id = row.get("telegram_user_id")
@@ -7379,7 +7439,8 @@ async def auto_welcome_after_first_payment(bot: Bot) -> None:
                     )
                     if ok:
                         try:
-                            db.create_subscription_notification(
+                            await asyncio.to_thread(
+                                db.create_subscription_notification,
                                 subscription_id=sub_id,
                                 notification_type="welcome_after_first_payment",
                                 telegram_user_id=tg_id,
@@ -7404,7 +7465,7 @@ async def auto_welcome_after_first_payment(bot: Bot) -> None:
             await asyncio.sleep(WELCOME_AFTER_FIRST_PAYMENT_INTERVAL_SEC)
 
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_WELCOME_AFTER_FIRST_PAYMENT)
 
 
 async def auto_handshake_followup_notifications(bot: Bot) -> None:
@@ -7413,7 +7474,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
     - через 10 мин: handshake_followup_10m
     - через 2 часа: handshake_followup_2h (только триал/промо)
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP):
         log.info("[HandshakeFollowup] Job already running in another instance")
         return
 
@@ -7451,7 +7512,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
         while True:
             try:
                 for followup_type, text, has_buttons in FOLLOWUPS:
-                    candidates = db.get_handshake_followup_candidates(followup_type)
+                    candidates = await asyncio.to_thread(db.get_handshake_followup_candidates, followup_type)
                     for row in candidates[:HANDSHAKE_FOLLOWUP_BATCH_SIZE]:
                         sub_id = row.get("subscription_id")
                         tg_id = row.get("telegram_user_id")
@@ -7474,7 +7535,8 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
                         )
                         if ok:
                             try:
-                                db.create_subscription_notification(
+                                await asyncio.to_thread(
+                                    db.create_subscription_notification,
                                     subscription_id=sub_id,
                                     notification_type=followup_type,
                                     telegram_user_id=tg_id,
@@ -7495,7 +7557,7 @@ async def auto_handshake_followup_notifications(bot: Bot) -> None:
             await asyncio.sleep(HANDSHAKE_FOLLOWUP_INTERVAL_SEC)
 
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_HANDSHAKE_FOLLOWUP)
 
 
 HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC = 60
@@ -7511,7 +7573,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
     Short confirmation follow-up ~60 сек после первого handshake-сообщения.
     Только подтверждение «всё ок» + кнопка поддержки, без продажи.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION):
         log.info("[HandshakeShortConfirm] Job already running in another instance")
         return
 
@@ -7519,7 +7581,8 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
     try:
         while True:
             try:
-                candidates = db.get_handshake_short_confirmation_candidates(
+                candidates = await asyncio.to_thread(
+                    db.get_handshake_short_confirmation_candidates,
                     interval_seconds=HANDSHAKE_SHORT_CONFIRMATION_DELAY_SEC,
                     max_age_seconds=HANDSHAKE_SHORT_CONFIRMATION_MAX_AGE_SEC,
                 )
@@ -7543,7 +7606,8 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
                     if ok:
                         log.info("[ShortConfirm] sent tg_id=%s sub_id=%s", tg_id, sub_id)
                         try:
-                            db.create_subscription_notification(
+                            await asyncio.to_thread(
+                                db.create_subscription_notification,
                                 subscription_id=sub_id,
                                 notification_type="handshake_short_confirmation",
                                 telegram_user_id=tg_id,
@@ -7558,7 +7622,7 @@ async def auto_handshake_short_confirmation(bot: Bot) -> None:
             await asyncio.sleep(HANDSHAKE_SHORT_CONFIRMATION_INTERVAL_SEC)
 
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_HANDSHAKE_SHORT_CONFIRMATION)
 
 
 async def auto_no_handshake_reminder(bot: Bot) -> None:
@@ -7567,7 +7631,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
     и отправляет напоминание: через 2h, через 24h и через 5 дней.
     Пауза 5 сек между отправками, обработка блокировки/удаления бота.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER):
         log.info("[NoHandshakeRemind] Job already running in another instance")
         return
 
@@ -7576,13 +7640,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
             try:
                 handshakes = {}
                 try:
-                    if hasattr(asyncio, "to_thread"):
-                        handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
-                    else:
-                        loop = asyncio.get_running_loop()
-                        handshakes = await loop.run_in_executor(
-                            None, wg.get_handshake_timestamps
-                        )
+                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
                 except Exception as e:
                     log.error(
                         "[NoHandshakeRemind] Failed to get wg handshakes: %r, skip run",
@@ -7662,7 +7720,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                     if batch_idx > 0:
                         await asyncio.sleep(NO_HANDSHAKE_PAUSE_BETWEEN_TYPES)
                     handshakes = await _fetch_handshakes()
-                    subs = db.get_subscriptions_for_no_handshake_reminder(reminder_type)
+                    subs = await asyncio.to_thread(db.get_subscriptions_for_no_handshake_reminder, reminder_type)
                     stats_sent = 0
                     stats_send_failed = 0
                     stats_db_error = 0
@@ -7689,7 +7747,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                         # Для survey — запись только после успешной отправки; для остальных — до (идемпотентность)
                         if reminder_type != "no_handshake_survey":
                             try:
-                                db.create_subscription_notification(
+                                await asyncio.to_thread(
+                                    db.create_subscription_notification,
                                     subscription_id=sub_id,
                                     notification_type=reminder_type,
                                     telegram_user_id=telegram_user_id,
@@ -7736,7 +7795,8 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
                             stats_sent += 1
                             if reminder_type == "no_handshake_survey":
                                 try:
-                                    db.create_subscription_notification(
+                                    await asyncio.to_thread(
+                                        db.create_subscription_notification,
                                         subscription_id=sub_id,
                                         notification_type=reminder_type,
                                         telegram_user_id=telegram_user_id,
@@ -7777,7 +7837,7 @@ async def auto_no_handshake_reminder(bot: Bot) -> None:
             await asyncio.sleep(3600)
 
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_NO_HANDSHAKE_REMINDER)
 
 
 CONFIG_CHECKPOINT_DELAY_SEC = 180
@@ -7791,27 +7851,22 @@ async def auto_config_checkpoint(bot: Bot) -> None:
     Если handshake ещё нет — отправляет сообщение «Удалось подключиться к VPN?».
     Устойчив к рестарту процесса: состояние хранится в subscription_notifications.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_CONFIG_CHECKPOINT):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_CONFIG_CHECKPOINT):
         log.info("[ConfigCheckpoint] Job already running in another instance")
         return
 
     try:
         while True:
             try:
-                candidates = db.get_pending_config_checkpoints(
+                candidates = await asyncio.to_thread(
+                    db.get_pending_config_checkpoints,
                     interval_seconds=CONFIG_CHECKPOINT_DELAY_SEC,
                 )
                 if not candidates:
                     await asyncio.sleep(CONFIG_CHECKPOINT_JOB_INTERVAL_SEC)
                     continue
 
-                if hasattr(asyncio, "to_thread"):
-                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
-                else:
-                    loop = asyncio.get_running_loop()
-                    handshakes = await loop.run_in_executor(
-                        None, wg.get_handshake_timestamps
-                    )
+                handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
 
                 for row in candidates:
                     sub_id = row.get("subscription_id")
@@ -7819,7 +7874,7 @@ async def auto_config_checkpoint(bot: Bot) -> None:
                     if not sub_id or not tg_id:
                         continue
                     try:
-                        sub = db.get_subscription_by_id(sub_id)
+                        sub = await asyncio.to_thread(db.get_subscription_by_id, sub_id)
                         if not sub or not sub.get("active"):
                             continue
                         pub_key = (sub.get("wg_public_key") or "").strip()
@@ -7827,21 +7882,15 @@ async def auto_config_checkpoint(bot: Bot) -> None:
                             continue
                         if handshakes.get(pub_key, 0) > 0:
                             continue
-                        if hasattr(asyncio, "to_thread"):
-                            handshakes_refresh = await asyncio.to_thread(
-                                wg.get_handshake_timestamps
-                            )
-                        else:
-                            handshakes_refresh = await asyncio.get_running_loop().run_in_executor(
-                                None, wg.get_handshake_timestamps
-                            )
+                        handshakes_refresh = await asyncio.to_thread(wg.get_handshake_timestamps)
                         if handshakes_refresh.get(pub_key, 0) > 0:
                             continue
                         await send_config_checkpoint_message(
                             telegram_user_id=tg_id,
                             subscription_id=sub_id,
                         )
-                        db.create_subscription_notification(
+                        await asyncio.to_thread(
+                            db.create_subscription_notification,
                             subscription_id=sub_id,
                             notification_type="config_checkpoint_sent",
                             telegram_user_id=tg_id,
@@ -7861,7 +7910,7 @@ async def auto_config_checkpoint(bot: Bot) -> None:
                 log.error("[ConfigCheckpoint] Unexpected error in loop: %r", e)
                 await asyncio.sleep(CONFIG_CHECKPOINT_JOB_INTERVAL_SEC)
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_CONFIG_CHECKPOINT)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_CONFIG_CHECKPOINT)
 
 
 RECENTLY_EXPIRED_TRIAL_FOLLOWUP_DELAY_SEC = 180
@@ -7873,27 +7922,22 @@ async def auto_recently_expired_trial_followup(bot: Bot) -> None:
     Follow-up для сценария trial expired → paid: через ~3 мин после отправки конфига
     проверяем handshake; если нет — напоминаем использовать новый конфиг и даём resend.
     """
-    if not db.acquire_job_lock(settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP):
+    if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP):
         log.info("[RecentExpiredTrialFollowup] Job already running in another instance")
         return
 
     try:
         while True:
             try:
-                candidates = db.get_pending_recently_expired_trial_followups(
+                candidates = await asyncio.to_thread(
+                    db.get_pending_recently_expired_trial_followups,
                     interval_seconds=RECENTLY_EXPIRED_TRIAL_FOLLOWUP_DELAY_SEC,
                 )
                 if not candidates:
                     await asyncio.sleep(RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC)
                     continue
 
-                if hasattr(asyncio, "to_thread"):
-                    handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
-                else:
-                    loop = asyncio.get_running_loop()
-                    handshakes = await loop.run_in_executor(
-                        None, wg.get_handshake_timestamps
-                    )
+                handshakes = await asyncio.to_thread(wg.get_handshake_timestamps)
 
                 for row in candidates:
                     sub_id = row.get("subscription_id")
@@ -7901,7 +7945,7 @@ async def auto_recently_expired_trial_followup(bot: Bot) -> None:
                     if not sub_id or not tg_id:
                         continue
                     try:
-                        sub = db.get_subscription_by_id(sub_id)
+                        sub = await asyncio.to_thread(db.get_subscription_by_id, sub_id)
                         if not sub or not sub.get("active"):
                             continue
                         pub_key = (sub.get("wg_public_key") or "").strip()
@@ -7930,7 +7974,8 @@ async def auto_recently_expired_trial_followup(bot: Bot) -> None:
                             text=TRIAL_EXPIRED_PAID_FOLLOWUP_NO_HANDSHAKE_TEXT,
                             reply_markup=keyboard,
                         )
-                        db.create_subscription_notification(
+                        await asyncio.to_thread(
+                            db.create_subscription_notification,
                             subscription_id=sub_id,
                             notification_type="recently_expired_trial_followup_sent",
                             telegram_user_id=tg_id,
@@ -7958,7 +8003,75 @@ async def auto_recently_expired_trial_followup(bot: Bot) -> None:
                 )
                 await asyncio.sleep(RECENTLY_EXPIRED_TRIAL_FOLLOWUP_JOB_INTERVAL_SEC)
     finally:
-        db.release_job_lock(settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP)
+        await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_RECENTLY_EXPIRED_TRIAL_FOLLOWUP)
+
+
+REFERRAL_DAILY_SUMMARY_RUN_AT_HOUR_UTC = 12  # 12:00 UTC
+REFERRAL_DAILY_SUMMARY_INTERVAL_SEC = 86400  # 24 часа
+
+
+async def auto_referral_daily_summary(bot: Bot) -> None:
+    """
+    Раз в сутки (12:00 UTC) отправляет реферерам с сетью уровня 2+ агрегированный дайджест
+    за последние 24 часа (подключения, оплаты, баллы). Не трогает уровень 1 (realtime).
+    """
+    from datetime import datetime, timezone
+
+    async def _sleep_until_next_noon() -> None:
+        now = datetime.now(timezone.utc)
+        next_run = now.replace(
+            hour=REFERRAL_DAILY_SUMMARY_RUN_AT_HOUR_UTC,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        if next_run <= now:
+            next_run = next_run + timedelta(days=1)
+        delay = (next_run - now).total_seconds()
+        log.info(
+            "[ReferralDailySummary] Next run at %s UTC (in %.0f s)",
+            next_run.isoformat(),
+            delay,
+        )
+        await asyncio.sleep(delay)
+
+    await _sleep_until_next_noon()
+
+    while True:
+        if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_REFERRAL_DAILY_SUMMARY):
+            log.info("[ReferralDailySummary] Job already running in another instance")
+            await asyncio.sleep(REFERRAL_DAILY_SUMMARY_INTERVAL_SEC)
+            continue
+
+        try:
+            candidates = await asyncio.to_thread(db.get_referral_daily_summary_candidates)
+            log.info("[ReferralDailySummary] Candidates: %s", len(candidates))
+            for row in candidates:
+                tg_id = row.get("top_ref") or row.get("telegram_user_id")
+                if not tg_id:
+                    continue
+                connected = int(row.get("connected_count") or 0)
+                payments = int(row.get("payments_count") or 0)
+                points_sum = int(row.get("points_sum") or 0)
+                try:
+                    await send_referral_daily_summary_notification(
+                        telegram_user_id=tg_id,
+                        connected_count=connected,
+                        payments_count=payments,
+                        points_sum=points_sum,
+                    )
+                    await asyncio.to_thread(db.create_referral_daily_summary_sent, tg_id)
+                except Exception as e:
+                    log.warning(
+                        "[ReferralDailySummary] Failed to send to tg_id=%s: %r",
+                        tg_id,
+                        e,
+                    )
+                await asyncio.sleep(1)
+        finally:
+            await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_REFERRAL_DAILY_SUMMARY)
+
+        await asyncio.sleep(REFERRAL_DAILY_SUMMARY_INTERVAL_SEC)
 
 
 async def main() -> None:
@@ -8006,6 +8119,7 @@ async def main() -> None:
     asyncio.create_task(auto_no_handshake_reminder(bot))
     asyncio.create_task(auto_config_checkpoint(bot))
     asyncio.create_task(auto_recently_expired_trial_followup(bot))
+    asyncio.create_task(auto_referral_daily_summary(bot))
 
     app = create_app()
     runner = web.AppRunner(app)
