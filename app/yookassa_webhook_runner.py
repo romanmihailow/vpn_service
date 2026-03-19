@@ -642,7 +642,10 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                                     payment_channel="YooKassa",
                                 )
                                 # Короткое CTA-уведомление — один раз на подписку (первому рефереру)
-                                if not db.has_subscription_notification(subscription_id, "referral_points_awarded"):
+                                if (
+                                    not db.has_subscription_notification(subscription_id, "referral_points_awarded")
+                                    and db.is_ref_points_notification_enabled(ref_tg_id)
+                                ):
                                     try:
                                         await send_referral_points_awarded_notification(
                                             referrer_telegram_id=ref_tg_id,
@@ -826,7 +829,10 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                             tariff_code=tariff_code,
                             payment_channel="YooKassa",
                         )
-                        if not db.has_subscription_notification(base_sub_id, "referral_points_awarded"):
+                        if (
+                            not db.has_subscription_notification(base_sub_id, "referral_points_awarded")
+                            and db.is_ref_points_notification_enabled(ref_tg_id)
+                        ):
                             try:
                                 await send_referral_points_awarded_notification(
                                     referrer_telegram_id=ref_tg_id,

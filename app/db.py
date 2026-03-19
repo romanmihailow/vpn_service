@@ -364,6 +364,16 @@ def init_db() -> None:
         sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (telegram_user_id, sent_date)
     );
+
+    --------------------------------------------------------------------
+    -- Настройки реферальных уведомлений (вкл/выкл пользователем)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS user_notification_preferences (
+        telegram_user_id BIGINT PRIMARY KEY,
+        ref_connected_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        ref_points_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
     """
 
 
@@ -1556,6 +1566,90 @@ def create_referral_daily_summary_sent(telegram_user_id: int) -> None:
         with conn.cursor() as cur:
             cur.execute(sql, (telegram_user_id,))
         conn.commit()
+
+
+def get_or_create_user_notification_preferences(
+    telegram_user_id: int,
+) -> Dict[str, Any]:
+    """Возвращает настройки реферальных уведомлений; при отсутствии строки создаёт с default TRUE."""
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO user_notification_preferences (telegram_user_id, ref_connected_enabled, ref_points_enabled, updated_at)
+                VALUES (%s, TRUE, TRUE, NOW())
+                ON CONFLICT (telegram_user_id) DO NOTHING;
+                """,
+                (telegram_user_id,),
+            )
+            conn.commit()
+            cur.execute(
+                "SELECT telegram_user_id, ref_connected_enabled, ref_points_enabled, updated_at FROM user_notification_preferences WHERE telegram_user_id = %s",
+                (telegram_user_id,),
+            )
+            row = cur.fetchone()
+    if row:
+        return dict(row)
+    return {
+        "telegram_user_id": telegram_user_id,
+        "ref_connected_enabled": True,
+        "ref_points_enabled": True,
+        "updated_at": None,
+    }
+
+
+def set_ref_connected_notification_enabled(telegram_user_id: int, enabled: bool) -> None:
+    """Включает или выключает уведомления «приглашённый подключил VPN»."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_notification_preferences (telegram_user_id, ref_connected_enabled, ref_points_enabled, updated_at)
+                VALUES (%s, %s, TRUE, NOW())
+                ON CONFLICT (telegram_user_id) DO UPDATE SET ref_connected_enabled = EXCLUDED.ref_connected_enabled, updated_at = NOW();
+                """,
+                (telegram_user_id, enabled),
+            )
+        conn.commit()
+
+
+def set_ref_points_notification_enabled(telegram_user_id: int, enabled: bool) -> None:
+    """Включает или выключает уведомления о начислении реферальных баллов."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO user_notification_preferences (telegram_user_id, ref_connected_enabled, ref_points_enabled, updated_at)
+                VALUES (%s, TRUE, %s, NOW())
+                ON CONFLICT (telegram_user_id) DO UPDATE SET ref_points_enabled = EXCLUDED.ref_points_enabled, updated_at = NOW();
+                """,
+                (telegram_user_id, enabled),
+            )
+        conn.commit()
+
+
+def is_ref_connected_notification_enabled(telegram_user_id: int) -> bool:
+    """Включены ли уведомления «приглашённый подключил VPN». Нет строки = включено (True)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ref_connected_enabled FROM user_notification_preferences WHERE telegram_user_id = %s",
+                (telegram_user_id,),
+            )
+            row = cur.fetchone()
+    return row[0] if row else True
+
+
+def is_ref_points_notification_enabled(telegram_user_id: int) -> bool:
+    """Включены ли уведомления о начислении реферальных баллов. Нет строки = включено (True)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ref_points_enabled FROM user_notification_preferences WHERE telegram_user_id = %s",
+                (telegram_user_id,),
+            )
+            row = cur.fetchone()
+    return row[0] if row else True
 
 
 def get_latest_subscription_for_telegram(

@@ -196,7 +196,10 @@ async def process_heleket_event(data: dict) -> None:
                                     tariff_code=tariff_code,
                                     payment_channel="Heleket",
                                 )
-                                if not db.has_subscription_notification(ext_sub_id, "referral_points_awarded"):
+                                if (
+                                    not db.has_subscription_notification(ext_sub_id, "referral_points_awarded")
+                                    and db.is_ref_points_notification_enabled(ref_tg_id)
+                                ):
                                     try:
                                         await send_referral_points_awarded_notification(
                                             referrer_telegram_id=ref_tg_id,
@@ -865,7 +868,10 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
                         )
-                        if not db.has_subscription_notification(sub_id, "referral_points_awarded"):
+                        if (
+                            not db.has_subscription_notification(sub_id, "referral_points_awarded")
+                            and db.is_ref_points_notification_enabled(ref_tg_id)
+                        ):
                             try:
                                 await send_referral_points_awarded_notification(
                                     referrer_telegram_id=ref_tg_id,
@@ -1048,7 +1054,10 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
                         )
-                        if not db.has_subscription_notification(subscription_id, "referral_points_awarded"):
+                        if (
+                            not db.has_subscription_notification(subscription_id, "referral_points_awarded")
+                            and db.is_ref_points_notification_enabled(ref_tg_id)
+                        ):
                             try:
                                 await send_referral_points_awarded_notification(
                                     referrer_telegram_id=ref_tg_id,
