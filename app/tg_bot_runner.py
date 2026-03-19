@@ -2934,14 +2934,12 @@ async def cmd_ref(message: Message) -> None:
 
 
 NOTIFY_REF_STATUS_TEXT = (
-    "<b>Настройки реферальных уведомлений</b>\n\n"
-    "• Подключение приглашённых: {ref_connected}\n"
-    "• Начисление баллов: {ref_points}\n\n"
+    "⚙️ Настройки реферальных уведомлений:\n\n"
+    "• Подключение приглашённых: {ref_connected_status}\n"
+    "• Начисление баллов: {ref_points_status}\n\n"
     "Команды:\n"
-    "/notify_ref_connected on — включить уведомления о подключении приглашённых\n"
-    "/notify_ref_connected off — выключить\n"
-    "/notify_ref_points on — включить уведомления о начислении баллов\n"
-    "/notify_ref_points off — выключить"
+    " /notify_ref_connected off\n"
+    " /notify_ref_points off"
 )
 
 
@@ -2953,9 +2951,9 @@ async def cmd_notify_ref_status(message: Message) -> None:
         await message.answer("Не удалось определить пользователя.", disable_web_page_preview=True)
         return
     prefs = await asyncio.to_thread(db.get_or_create_user_notification_preferences, user.id)
-    ref_connected = "включено" if prefs.get("ref_connected_enabled", True) else "выключено"
-    ref_points = "включено" if prefs.get("ref_points_enabled", True) else "выключено"
-    text = NOTIFY_REF_STATUS_TEXT.format(ref_connected=ref_connected, ref_points=ref_points)
+    ref_connected_status = "включено" if prefs.get("ref_connected_enabled", True) else "выключено"
+    ref_points_status = "включено" if prefs.get("ref_points_enabled", True) else "выключено"
+    text = NOTIFY_REF_STATUS_TEXT.format(ref_connected_status=ref_connected_status, ref_points_status=ref_points_status)
     await message.answer(text, disable_web_page_preview=True)
 
 
@@ -2971,7 +2969,12 @@ async def cmd_notify_ref_connected(message: Message) -> None:
     arg = (parts[1].strip().lower() if len(parts) == 2 else "").replace(" ", "")
     if arg not in ("on", "off"):
         await message.answer(
-            "Использование:\n/notify_ref_connected on\n/notify_ref_connected off",
+            "Неверный формат команды.\n\n"
+            "Использование:\n"
+            " /notify_ref_connected on\n"
+            " /notify_ref_connected off\n\n"
+            " /notify_ref_points on\n"
+            " /notify_ref_points off",
             disable_web_page_preview=True,
         )
         return
@@ -2979,12 +2982,16 @@ async def cmd_notify_ref_connected(message: Message) -> None:
     await asyncio.to_thread(db.set_ref_connected_notification_enabled, user.id, enabled)
     if enabled:
         await message.answer(
-            "Готово 👍\nУведомления о том, что приглашённый пользователь подключил VPN, включены.",
+            "Готово 👍\n\n"
+            "Теперь вы будете получать уведомления,\n"
+            "когда приглашённые пользователи подключают VPN.",
             disable_web_page_preview=True,
         )
     else:
         await message.answer(
-            "Готово 👍\nУведомления о том, что приглашённый пользователь подключил VPN, отключены.",
+            "Готово 👍\n\n"
+            "Вы отключили уведомления о том,\n"
+            "что приглашённые пользователи подключают VPN.",
             disable_web_page_preview=True,
         )
 
@@ -3001,7 +3008,12 @@ async def cmd_notify_ref_points(message: Message) -> None:
     arg = (parts[1].strip().lower() if len(parts) == 2 else "").replace(" ", "")
     if arg not in ("on", "off"):
         await message.answer(
-            "Использование:\n/notify_ref_points on\n/notify_ref_points off",
+            "Неверный формат команды.\n\n"
+            "Использование:\n"
+            " /notify_ref_connected on\n"
+            " /notify_ref_connected off\n\n"
+            " /notify_ref_points on\n"
+            " /notify_ref_points off",
             disable_web_page_preview=True,
         )
         return
@@ -3009,12 +3021,16 @@ async def cmd_notify_ref_points(message: Message) -> None:
     await asyncio.to_thread(db.set_ref_points_notification_enabled, user.id, enabled)
     if enabled:
         await message.answer(
-            "Готово 👍\nУведомления о начислении бонусных баллов включены.",
+            "Готово 👍\n\n"
+            "Теперь вы будете получать уведомления\n"
+            "о начислении бонусных баллов.",
             disable_web_page_preview=True,
         )
     else:
         await message.answer(
-            "Готово 👍\nУведомления о начислении бонусных баллов отключены.",
+            "Готово 👍\n\n"
+            "Вы отключили уведомления\n"
+            "о начислении бонусных баллов.",
             disable_web_page_preview=True,
         )
 
