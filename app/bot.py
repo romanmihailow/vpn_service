@@ -288,12 +288,6 @@ REFERRAL_USER_CONNECTED_TEXT = (
     "Пользователь по вашей ссылке подключил VPN 👍"
 )
 
-REFERRAL_POINTS_AWARDED_TEXT = (
-    "🔥 Отличные новости!\n\n"
-    "Вам начислены бонусные баллы за приглашение пользователя 👍"
-)
-
-
 def _format_referral_daily_summary_text(
     connected_count: int,
     payments_count: int,
@@ -376,25 +370,6 @@ async def send_referral_user_connected_notification(
         await bot.session.close()
 
 
-async def send_referral_points_awarded_notification(
-    referrer_telegram_id: int,
-    referred_sub_id: int,
-) -> None:
-    """
-    Короткое уведомление рефереру о начислении баллов + CTA.
-    Кнопки: points:open:from_referral:{id}, ref:open_from_referral:points:{id}.
-    """
-    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-    try:
-        await bot.send_message(
-            chat_id=referrer_telegram_id,
-            text=REFERRAL_POINTS_AWARDED_TEXT,
-            reply_markup=_make_referral_points_awarded_keyboard(referred_sub_id),
-        )
-    finally:
-        await bot.session.close()
-
-
 async def send_referral_daily_summary_notification(
     telegram_user_id: int,
     connected_count: int,
@@ -427,25 +402,21 @@ async def send_referral_reward_notification(
     level: int | None,
     tariff_code: str,
     payment_channel: str,
+    referred_sub_id: int,
 ) -> None:
     """
-    Уведомление пользователю о начислении реферальных баллов.
+    Уведомление пользователю о начислении реферальных баллов (одно сообщение с кнопками).
     """
     bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
     try:
         sign = "+" if points_delta >= 0 else ""
-        level_part: str
-        if level is None:
-            level_part = ""
-        else:
-            level_part = f"\nУровень реферала: <b>{level}</b>"
-
+        level_str = str(level) if level is not None else "—"
         text = (
             "🎁 Тебе начислены реферальные баллы!\n\n"
-            f"Из-за оплаты подписки по твоей реферальной цепочке.\n"
-            f"Начислено: <b>{sign}{points_delta}</b> баллов.{level_part}\n\n"
-            f"Тариф: <b>{tariff_code}</b>\n"
-            f"Канал оплаты: <b>{payment_channel}</b>"
+            "Из-за оплаты подписки по твоей реферальной цепочке.\n"
+            f"Начислено: {sign}{points_delta} баллов.\n"
+            f"Уровень реферала: {level_str}\n\n"
+            f"Тариф: {tariff_code}"
         )
 
         await bot.send_message(
@@ -453,6 +424,7 @@ async def send_referral_reward_notification(
             text=text,
             parse_mode="HTML",
             disable_web_page_preview=True,
+            reply_markup=_make_referral_points_awarded_keyboard(referred_sub_id),
         )
     finally:
         await bot.session.close()

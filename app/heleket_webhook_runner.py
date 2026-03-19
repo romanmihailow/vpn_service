@@ -18,7 +18,6 @@ from .bot import (
     send_vpn_config_to_user,
     send_subscription_extended_notification,
     send_referral_reward_notification,
-    send_referral_points_awarded_notification,
 )
 from .config import settings
 from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
@@ -195,28 +194,18 @@ async def process_heleket_event(data: dict) -> None:
                                     level=level,
                                     tariff_code=tariff_code,
                                     payment_channel="Heleket",
+                                    referred_sub_id=ext_sub_id,
                                 )
                                 if (
                                     not db.has_subscription_notification(ext_sub_id, "referral_points_awarded")
                                     and db.is_ref_points_notification_enabled(ref_tg_id)
                                 ):
-                                    try:
-                                        await send_referral_points_awarded_notification(
-                                            referrer_telegram_id=ref_tg_id,
-                                            referred_sub_id=ext_sub_id,
-                                        )
-                                        db.create_subscription_notification(
-                                            subscription_id=ext_sub_id,
-                                            notification_type="referral_points_awarded",
-                                            telegram_user_id=ref_tg_id,
-                                            expires_at=base_sub.get("expires_at"),
-                                        )
-                                    except Exception as inner_e:
-                                        log.warning(
-                                            "[HeleketWebhook] failed to send referral_points_awarded (ext) uuid=%s: %r",
-                                            uuid,
-                                            inner_e,
-                                        )
+                                    db.create_subscription_notification(
+                                        subscription_id=ext_sub_id,
+                                        notification_type="referral_points_awarded",
+                                        telegram_user_id=ref_tg_id,
+                                        expires_at=base_sub.get("expires_at"),
+                                    )
                     except Exception as e:
                         log.error(
                             "[HeleketWebhook] failed to send referral reward notifications for payment_id=%s: %r",
@@ -867,28 +856,18 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             level=level,
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
+                            referred_sub_id=sub_id,
                         )
                         if (
                             not db.has_subscription_notification(sub_id, "referral_points_awarded")
                             and db.is_ref_points_notification_enabled(ref_tg_id)
                         ):
-                            try:
-                                await send_referral_points_awarded_notification(
-                                    referrer_telegram_id=ref_tg_id,
-                                    referred_sub_id=sub_id,
-                                )
-                                db.create_subscription_notification(
-                                    subscription_id=sub_id,
-                                    notification_type="referral_points_awarded",
-                                    telegram_user_id=ref_tg_id,
-                                    expires_at=new_expires_at,
-                                )
-                            except Exception as inner_e:
-                                log.warning(
-                                    "[HeleketWebhook] failed to send referral_points_awarded (ext) uuid=%s: %r",
-                                    uuid,
-                                    inner_e,
-                                )
+                            db.create_subscription_notification(
+                                subscription_id=sub_id,
+                                notification_type="referral_points_awarded",
+                                telegram_user_id=ref_tg_id,
+                                expires_at=new_expires_at,
+                            )
             except Exception as e:
                 log.error(
                     "[HeleketWebhook] failed to send referral reward notifications for uuid=%s: %r",
@@ -1053,28 +1032,18 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             level=level,
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
+                            referred_sub_id=subscription_id,
                         )
                         if (
                             not db.has_subscription_notification(subscription_id, "referral_points_awarded")
                             and db.is_ref_points_notification_enabled(ref_tg_id)
                         ):
-                            try:
-                                await send_referral_points_awarded_notification(
-                                    referrer_telegram_id=ref_tg_id,
-                                    referred_sub_id=subscription_id,
-                                )
-                                db.create_subscription_notification(
-                                    subscription_id=subscription_id,
-                                    notification_type="referral_points_awarded",
-                                    telegram_user_id=ref_tg_id,
-                                    expires_at=sub_for_ref.get("expires_at") if sub_for_ref else None,
-                                )
-                            except Exception as inner_e:
-                                log.warning(
-                                    "[HeleketWebhook] failed to send referral_points_awarded uuid=%s: %r",
-                                    uuid,
-                                    inner_e,
-                                )
+                            db.create_subscription_notification(
+                                subscription_id=subscription_id,
+                                notification_type="referral_points_awarded",
+                                telegram_user_id=ref_tg_id,
+                                expires_at=sub_for_ref.get("expires_at") if sub_for_ref else None,
+                            )
             except Exception as e:
                 log.error(
                     "[HeleketWebhook] failed to send referral reward notifications for uuid=%s: %r",
