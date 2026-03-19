@@ -26,6 +26,7 @@ from .bot import (
     send_subscription_expired_notification,
     send_config_checkpoint_message,
     send_trial_expired_paid_notification,
+    send_referral_user_connected_notification,
 )
 from .messages import (
     CONFIG_CHECK_FAIL,
@@ -1421,6 +1422,71 @@ async def pay_open_callback(callback: CallbackQuery) -> None:
 async def withdraw_open_callback(callback: CallbackQuery) -> None:
     await callback.message.answer(
         "Данный раздел находится в разработке.",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("points:open:from_referral:"))
+async def points_open_from_referral_callback(callback: CallbackQuery) -> None:
+    """
+    Кнопка «Оплатить баллами» из уведомления referral_points_awarded.
+    Записывает referral_points_awarded_pay_clicked, затем открывает тот же flow, что и points:open.
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    data = callback.data or ""
+    parts = data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+    try:
+        referred_sub_id = int(parts[3])
+    except (ValueError, TypeError):
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+
+    sub = db.get_subscription_by_id(referred_sub_id)
+    if sub and not db.has_subscription_notification(referred_sub_id, "referral_points_awarded_pay_clicked"):
+        try:
+            db.create_subscription_notification(
+                subscription_id=referred_sub_id,
+                notification_type="referral_points_awarded_pay_clicked",
+                telegram_user_id=user.id,
+                expires_at=sub.get("expires_at"),
+            )
+        except Exception as e:
+            log.warning(
+                "[Referral] Failed to record referral_points_awarded_pay_clicked sub_id=%s: %r",
+                referred_sub_id,
+                e,
+            )
+
+    balance = db.get_user_points_balance(user.id)
+    min_cost = None
+    for tariff in TARIFFS_POINTS.values():
+        cost = tariff.get("points_cost")
+        if cost is not None and (min_cost is None or cost < min_cost):
+            min_cost = cost
+    if min_cost is None:
+        min_cost = 100
+    if balance < min_cost:
+        await callback.message.answer(
+            f"💰 Твой баланс: <b>{pluralize_points(balance)}</b>\n\n"
+            f"❌ Недостаточно баллов для оплаты подписки.\n"
+            f"Минимальная стоимость: <b>{pluralize_points(min_cost)}</b>.\n\n"
+            "Приглашай друзей по реферальной ссылке (/ref) и получай баллы за их оплаты!",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+    await callback.message.answer(
+        f"💰 Твой баланс: <b>{pluralize_points(balance)}</b>\n\n"
+        "Выбери тариф для оплаты баллами:",
+        reply_markup=POINTS_TARIFF_KEYBOARD,
         disable_web_page_preview=True,
     )
     await callback.answer()
@@ -3173,6 +3239,101 @@ async def ref_open_from_notify(callback: CallbackQuery) -> None:
     await callback.answer("Ссылку можно переслать другу.")
 
 
+@router.callback_query(F.data.startswith("ref:open_from_referral:"))
+async def ref_open_from_referral_callback(callback: CallbackQuery) -> None:
+    """
+    Кнопки из реферальных уведомлений (connected / points).
+    Формат: ref:open_from_referral:connected:{referred_sub_id} или ref:open_from_referral:points:{referred_sub_id}.
+    Открывает тот же referral flow, записывает клик для CRM.
+    """
+    user = callback.from_user
+    if user is None:
+        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        return
+
+    telegram_user_id = user.id
+    username = user.username
+    data = callback.data or ""
+    parts = data.split(":")
+    # ref, open_from_referral, context, referred_sub_id
+    if len(parts) < 4:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+    context = parts[2]  # "connected" или "points"
+    try:
+        referred_sub_id = int(parts[3])
+    except (ValueError, TypeError):
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+
+    sub = db.get_subscription_by_id(referred_sub_id)
+    if not sub:
+        await callback.answer("Подписка не найдена.", show_alert=True)
+        return
+
+    # Tracking: один раз на (subscription_id, notification_type)
+    if context == "connected":
+        click_type = "referral_user_connected_ref_clicked"
+    elif context == "points":
+        click_type = "referral_points_awarded_ref_clicked"
+    else:
+        await callback.answer("Ошибка данных кнопки.", show_alert=True)
+        return
+
+    if not db.has_subscription_notification(referred_sub_id, click_type):
+        try:
+            db.create_subscription_notification(
+                subscription_id=referred_sub_id,
+                notification_type=click_type,
+                telegram_user_id=telegram_user_id,
+                expires_at=sub.get("expires_at"),
+            )
+        except Exception as e:
+            log.warning("[Referral] Failed to record %s sub_id=%s: %r", click_type, referred_sub_id, e)
+
+    try:
+        info = db.get_or_create_referral_info(
+            telegram_user_id=telegram_user_id,
+            telegram_username=username,
+        )
+    except Exception as e:
+        log.error("[Referral] Failed to get referral info (ref_referral) tg_id=%s: %r", telegram_user_id, e)
+        await callback.answer("Ошибка, попробуй позже.", show_alert=True)
+        return
+
+    ref_code = info.get("ref_code")
+    try:
+        me = await callback.bot.get_me()
+        bot_username = me.username
+    except Exception as e:
+        log.error("[Referral] Failed to get bot username (ref_referral) tg_id=%s: %r", telegram_user_id, e)
+        bot_username = None
+
+    if bot_username and ref_code:
+        deep_link = f"https://t.me/{bot_username}?start={ref_code}"
+    elif ref_code:
+        deep_link = f"/start {ref_code}"
+    else:
+        deep_link = None
+
+    if not deep_link:
+        await callback.message.answer(
+            "Не удалось сформировать реферальную ссылку. Попробуй написать /ref или обратись в поддержку.",
+            disable_web_page_preview=True,
+        )
+        await callback.answer()
+        return
+
+    text = (
+        "🤝 Пригласи друга и продли подписку дешевле.\n\n"
+        "Отправь эту ссылку другу. Когда он подключится и оплатит подписку, "
+        "ты получишь баллы по реферальной программе:\n\n"
+        f"<a href=\"{deep_link}\">{deep_link}</a>"
+    )
+    await callback.message.answer(text, disable_web_page_preview=True)
+    await callback.answer("Ссылку можно переслать другу.")
+
+
 @router.callback_query(F.data.startswith("config:resend:"))
 async def config_resend_callback(callback: CallbackQuery) -> None:
     """
@@ -4568,6 +4729,12 @@ async def cmd_crm_report(message: Message) -> None:
         f"• пока не нужен: {r.get('no_handshake_survey_answer_2', 0)}\n"
         f"• пользуюсь другим VPN: {r.get('no_handshake_survey_answer_3', 0)}\n"
         f"• дорого: {r.get('no_handshake_survey_answer_4', 0)}\n\n"
+        "<b>Реферальные уведомления:</b>\n"
+        f"• уведомление «пользователь подключился»: {r.get('referral_user_connected', 0)}\n"
+        f"• нажали «Пригласить друга»: {r.get('referral_user_connected_ref_clicked', 0)}{f\" ({100 * r.get('referral_user_connected_ref_clicked', 0) // r['referral_user_connected']}%)\" if r.get('referral_user_connected', 0) else ''}\n\n"
+        f"• уведомление «начислены баллы»: {r.get('referral_points_awarded', 0)}\n"
+        f"• нажали «Оплатить баллами»: {r.get('referral_points_awarded_pay_clicked', 0)}{f\" ({100 * r.get('referral_points_awarded_pay_clicked', 0) // r['referral_points_awarded']}%)\" if r.get('referral_points_awarded', 0) else ''}\n"
+        f"• нажали «Пригласить друга»: {r.get('referral_points_awarded_ref_clicked', 0)}{f\" ({100 * r.get('referral_points_awarded_ref_clicked', 0) // r['referral_points_awarded']}%)\" if r.get('referral_points_awarded', 0) else ''}\n\n"
         "<b>Прочее:</b>\n"
         f"• первые оплаты после handshake: {r['first_paid_with_prior_handshake']}\n"
     )
@@ -7040,6 +7207,26 @@ async def auto_new_handshake_admin_notification(bot: Bot) -> None:
                             except Exception as e:
                                 log.warning(
                                     "[HandshakeUser] Failed to record notification sub_id=%s: %r",
+                                    sub_id,
+                                    e,
+                                )
+                            # Уведомление рефереру: приведённый подключился (один раз на подписку)
+                            try:
+                                referrer_id = db.get_referrer_telegram_id(tg_id)
+                                if referrer_id and not db.has_subscription_notification(sub_id, "referral_user_connected"):
+                                    await send_referral_user_connected_notification(
+                                        referrer_telegram_id=referrer_id,
+                                        referred_sub_id=sub_id,
+                                    )
+                                    db.create_subscription_notification(
+                                        subscription_id=sub_id,
+                                        notification_type="referral_user_connected",
+                                        telegram_user_id=referrer_id,
+                                        expires_at=sub.get("expires_at"),
+                                    )
+                            except Exception as e:
+                                log.warning(
+                                    "[ReferralUserConnected] Failed to notify referrer sub_id=%s: %r",
                                     sub_id,
                                     e,
                                 )

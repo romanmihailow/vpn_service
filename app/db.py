@@ -1358,6 +1358,11 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
         "no_handshake_survey_answer_2",
         "no_handshake_survey_answer_3",
         "no_handshake_survey_answer_4",
+        "referral_user_connected",
+        "referral_user_connected_ref_clicked",
+        "referral_points_awarded",
+        "referral_points_awarded_ref_clicked",
+        "referral_points_awarded_pay_clicked",
     ]
     result: Dict[str, Any] = {t: 0 for t in types}
     result["first_paid_with_prior_handshake"] = 0
@@ -1382,7 +1387,12 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_1') AS no_handshake_survey_answer_1,
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_2') AS no_handshake_survey_answer_2,
                   COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_3') AS no_handshake_survey_answer_3,
-                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_4') AS no_handshake_survey_answer_4
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'no_handshake_survey_answer_4') AS no_handshake_survey_answer_4,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'referral_user_connected') AS referral_user_connected,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'referral_user_connected_ref_clicked') AS referral_user_connected_ref_clicked,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'referral_points_awarded') AS referral_points_awarded,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'referral_points_awarded_ref_clicked') AS referral_points_awarded_ref_clicked,
+                  COUNT(DISTINCT subscription_id) FILTER (WHERE notification_type = 'referral_points_awarded_pay_clicked') AS referral_points_awarded_pay_clicked
                 FROM subscription_notifications
                 WHERE sent_at >= NOW() - (%s::text || ' days')::interval
                   AND notification_type = ANY(%s);
@@ -1407,6 +1417,11 @@ def get_crm_funnel_report(days: int = 7) -> Dict[str, Any]:
                 result["no_handshake_survey_answer_2"] = int(row[13] or 0)
                 result["no_handshake_survey_answer_3"] = int(row[14] or 0)
                 result["no_handshake_survey_answer_4"] = int(row[15] or 0)
+                result["referral_user_connected"] = int(row[16] or 0)
+                result["referral_user_connected_ref_clicked"] = int(row[17] or 0)
+                result["referral_points_awarded"] = int(row[18] or 0)
+                result["referral_points_awarded_ref_clicked"] = int(row[19] or 0)
+                result["referral_points_awarded_pay_clicked"] = int(row[20] or 0)
             result["no_handshake_survey_answers_total"] = (
                 result.get("no_handshake_survey_answer_1", 0)
                 + result.get("no_handshake_survey_answer_2", 0)

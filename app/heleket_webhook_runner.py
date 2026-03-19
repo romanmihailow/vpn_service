@@ -14,7 +14,12 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from . import db, wg
-from .bot import send_vpn_config_to_user, send_subscription_extended_notification, send_referral_reward_notification
+from .bot import (
+    send_vpn_config_to_user,
+    send_subscription_extended_notification,
+    send_referral_reward_notification,
+    send_referral_points_awarded_notification,
+)
 from .config import settings
 from .format_admin import fmt_user_line, fmt_ref_display, fmt_date
 from .logger import get_heleket_logger
@@ -174,24 +179,52 @@ async def process_heleket_event(data: dict) -> None:
                         uuid,
                         rewards_result,
                     )
+                    try:
+                        awards = rewards_result.get("awards") if isinstance(rewards_result, dict) else None
+                        if awards:
+                            ext_sub_id = base_sub["id"]
+                            for award in awards:
+                                ref_tg_id = award.get("referrer_telegram_user_id")
+                                points = award.get("bonus") or 0
+                                level = award.get("level")
+                                if not ref_tg_id or not points:
+                                    continue
+                                await send_referral_reward_notification(
+                                    telegram_user_id=ref_tg_id,
+                                    points_delta=points,
+                                    level=level,
+                                    tariff_code=tariff_code,
+                                    payment_channel="Heleket",
+                                )
+                                if not db.has_subscription_notification(ext_sub_id, "referral_points_awarded"):
+                                    try:
+                                        await send_referral_points_awarded_notification(
+                                            referrer_telegram_id=ref_tg_id,
+                                            referred_sub_id=ext_sub_id,
+                                        )
+                                        db.create_subscription_notification(
+                                            subscription_id=ext_sub_id,
+                                            notification_type="referral_points_awarded",
+                                            telegram_user_id=ref_tg_id,
+                                            expires_at=base_sub.get("expires_at"),
+                                        )
+                                    except Exception as inner_e:
+                                        log.warning(
+                                            "[HeleketWebhook] failed to send referral_points_awarded (ext) uuid=%s: %r",
+                                            uuid,
+                                            inner_e,
+                                        )
+                    except Exception as e:
+                        log.error(
+                            "[HeleketWebhook] failed to send referral reward notifications for payment_id=%s: %r",
+                            uuid,
+                            e,
+                        )
                 except Exception as e:
                     log.error(
                         "[HeleketWebhook] failed to apply referral rewards for payment_id=%s tg_id=%s: %r",
                         uuid,
                         telegram_user_id,
-                        e,
-                    )
-
-                try:
-                    await send_referral_reward_notification(
-                        payer_telegram_user_id=telegram_user_id,
-                        payment_id=uuid,
-                        payment_source="Heleket",
-                    )
-                except Exception as e:
-                    log.error(
-                        "[HeleketWebhook] failed to send referral reward notifications for payment_id=%s: %r",
-                        uuid,
                         e,
                     )
 
@@ -818,8 +851,8 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                 awards = rewards_result.get("awards") if isinstance(rewards_result, dict) else None
                 if awards:
                     for award in awards:
-                        ref_tg_id = award.get("telegram_user_id") or award.get("user_telegram_id")
-                        points = award.get("points") or award.get("delta") or 0
+                        ref_tg_id = award.get("referrer_telegram_user_id")
+                        points = award.get("bonus") or 0
                         level = award.get("level")
 
                         if not ref_tg_id or not points:
@@ -832,6 +865,24 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
                         )
+                        if not db.has_subscription_notification(sub_id, "referral_points_awarded"):
+                            try:
+                                await send_referral_points_awarded_notification(
+                                    referrer_telegram_id=ref_tg_id,
+                                    referred_sub_id=sub_id,
+                                )
+                                db.create_subscription_notification(
+                                    subscription_id=sub_id,
+                                    notification_type="referral_points_awarded",
+                                    telegram_user_id=ref_tg_id,
+                                    expires_at=new_expires_at,
+                                )
+                            except Exception as inner_e:
+                                log.warning(
+                                    "[HeleketWebhook] failed to send referral_points_awarded (ext) uuid=%s: %r",
+                                    uuid,
+                                    inner_e,
+                                )
             except Exception as e:
                 log.error(
                     "[HeleketWebhook] failed to send referral reward notifications for uuid=%s: %r",
@@ -981,9 +1032,10 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
             try:
                 awards = rewards_result.get("awards") if isinstance(rewards_result, dict) else None
                 if awards:
+                    sub_for_ref = db.get_subscription_by_id(subscription_id)
                     for award in awards:
-                        ref_tg_id = award.get("telegram_user_id") or award.get("user_telegram_id")
-                        points = award.get("points") or award.get("delta") or 0
+                        ref_tg_id = award.get("referrer_telegram_user_id")
+                        points = award.get("bonus") or 0
                         level = award.get("level")
 
                         if not ref_tg_id or not points:
@@ -996,6 +1048,24 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                             tariff_code=tariff_code,
                             payment_channel="Heleket",
                         )
+                        if not db.has_subscription_notification(subscription_id, "referral_points_awarded"):
+                            try:
+                                await send_referral_points_awarded_notification(
+                                    referrer_telegram_id=ref_tg_id,
+                                    referred_sub_id=subscription_id,
+                                )
+                                db.create_subscription_notification(
+                                    subscription_id=subscription_id,
+                                    notification_type="referral_points_awarded",
+                                    telegram_user_id=ref_tg_id,
+                                    expires_at=sub_for_ref.get("expires_at") if sub_for_ref else None,
+                                )
+                            except Exception as inner_e:
+                                log.warning(
+                                    "[HeleketWebhook] failed to send referral_points_awarded uuid=%s: %r",
+                                    uuid,
+                                    inner_e,
+                                )
             except Exception as e:
                 log.error(
                     "[HeleketWebhook] failed to send referral reward notifications for uuid=%s: %r",

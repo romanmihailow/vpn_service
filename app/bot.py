@@ -283,6 +283,89 @@ async def send_subscription_extended_notification(
         await bot.session.close()
 
 
+REFERRAL_USER_CONNECTED_TEXT = (
+    "🔥 Есть результат!\n\n"
+    "Пользователь по вашей ссылке подключил VPN 👍"
+)
+
+REFERRAL_POINTS_AWARDED_TEXT = (
+    "🔥 Отличные новости!\n\n"
+    "Вам начислены бонусные баллы за приглашение пользователя 👍"
+)
+
+
+def _make_referral_user_connected_keyboard(referred_sub_id: int) -> InlineKeyboardMarkup:
+    """Одна кнопка «Пригласить друга» с контекстом для tracking."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data=f"ref:open_from_referral:connected:{referred_sub_id}",
+                ),
+            ],
+        ]
+    )
+
+
+def _make_referral_points_awarded_keyboard(referred_sub_id: int) -> InlineKeyboardMarkup:
+    """Две кнопки для уведомления о начислении баллов (tracking по контексту)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎮 Оплатить баллами",
+                    callback_data=f"points:open:from_referral:{referred_sub_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🤝 Пригласить друга",
+                    callback_data=f"ref:open_from_referral:points:{referred_sub_id}",
+                ),
+            ],
+        ]
+    )
+
+
+async def send_referral_user_connected_notification(
+    referrer_telegram_id: int,
+    referred_sub_id: int,
+) -> None:
+    """
+    Уведомление рефереру: приведённый пользователь подключил VPN.
+    Кнопка с callback ref:open_from_referral:connected:{referred_sub_id}.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        await bot.send_message(
+            chat_id=referrer_telegram_id,
+            text=REFERRAL_USER_CONNECTED_TEXT,
+            reply_markup=_make_referral_user_connected_keyboard(referred_sub_id),
+        )
+    finally:
+        await bot.session.close()
+
+
+async def send_referral_points_awarded_notification(
+    referrer_telegram_id: int,
+    referred_sub_id: int,
+) -> None:
+    """
+    Короткое уведомление рефереру о начислении баллов + CTA.
+    Кнопки: points:open:from_referral:{id}, ref:open_from_referral:points:{id}.
+    """
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        await bot.send_message(
+            chat_id=referrer_telegram_id,
+            text=REFERRAL_POINTS_AWARDED_TEXT,
+            reply_markup=_make_referral_points_awarded_keyboard(referred_sub_id),
+        )
+    finally:
+        await bot.session.close()
+
+
 async def send_referral_reward_notification(
     telegram_user_id: int,
     points_delta: int,
