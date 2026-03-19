@@ -285,7 +285,8 @@ async def send_subscription_extended_notification(
 
 REFERRAL_USER_CONNECTED_TEXT = (
     "🔥 Есть результат!\n\n"
-    "Пользователь по вашей ссылке подключил VPN 👍"
+    "Пользователь по вашей ссылке подключил VPN 👍\n\n"
+    "Продолжайте делиться — это работает 🚀"
 )
 
 def _format_referral_daily_summary_text(
@@ -298,7 +299,7 @@ def _format_referral_daily_summary_text(
         "🔥 Обновление по вашей сети\n\n"
         f"+{connected_count} подключений\n"
         f"+{payments_count} оплат\n"
-        f"+{points_sum} баллов начислено\n\n"
+        f"+{points_sum} баллов заработано\n\n"
         "Продолжай делиться — это работает 👍"
     )
 
@@ -413,8 +414,8 @@ async def send_referral_reward_notification(
         level_str = str(level) if level is not None else "—"
         text = (
             "🎁 Тебе начислены реферальные баллы!\n\n"
-            "Из-за оплаты подписки по твоей реферальной цепочке.\n"
-            f"Начислено: {sign}{points_delta} баллов.\n"
+            "Пользователь по твоей ссылке оплатил подписку 💰\n"
+            f"Начислено: {sign}{points_delta} баллов\n"
             f"Уровень реферала: {level_str}\n\n"
             f"Тариф: {tariff_code}"
         )

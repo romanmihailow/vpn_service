@@ -2938,8 +2938,8 @@ NOTIFY_REF_STATUS_TEXT = (
     "• Подключение приглашённых: {ref_connected_status}\n"
     "• Начисление баллов: {ref_points_status}\n\n"
     "Команды:\n"
-    " /notify_ref_connected off\n"
-    " /notify_ref_points off"
+    " /notify_ref_connected on/off\n"
+    " /notify_ref_points on/off"
 )
 
 
