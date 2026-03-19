@@ -188,6 +188,8 @@ async def process_heleket_event(data: dict) -> None:
                                 level = award.get("level")
                                 if not ref_tg_id or not points:
                                     continue
+                                if level != 1:
+                                    continue
                                 await send_referral_reward_notification(
                                     telegram_user_id=ref_tg_id,
                                     points_delta=points,
@@ -849,6 +851,8 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
 
                         if not ref_tg_id or not points:
                             continue
+                        if level != 1:
+                            continue
 
                         await send_referral_reward_notification(
                             telegram_user_id=ref_tg_id,
@@ -1024,6 +1028,8 @@ async def handle_heleket_webhook(request: web.Request) -> web.Response:
                         level = award.get("level")
 
                         if not ref_tg_id or not points:
+                            continue
+                        if level != 1:
                             continue
 
                         await send_referral_reward_notification(

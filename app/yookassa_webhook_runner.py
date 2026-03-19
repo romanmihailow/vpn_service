@@ -633,6 +633,8 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                                 level = award.get("level")
                                 if not ref_tg_id or not points:
                                     continue
+                                if level != 1:
+                                    continue
                                 await send_referral_reward_notification(
                                     telegram_user_id=ref_tg_id,
                                     points_delta=points,
@@ -809,6 +811,8 @@ async def process_yookassa_event(data: dict, remote_ip: str) -> None:
                         points = award.get("bonus") or 0
                         level = award.get("level")
                         if not ref_tg_id or not points:
+                            continue
+                        if level != 1:
                             continue
                         await send_referral_reward_notification(
                             telegram_user_id=ref_tg_id,
