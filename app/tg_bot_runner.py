@@ -28,6 +28,8 @@ from .bot import (
     send_trial_expired_paid_notification,
     send_referral_user_connected_notification,
     send_referral_daily_summary_notification,
+    send_referral_reward_notification,
+    send_aggregated_referral_reward_notification,
 )
 from .messages import (
     CONFIG_CHECK_FAIL,
@@ -8181,6 +8183,79 @@ async def auto_referral_daily_summary(bot: Bot) -> None:
         await asyncio.sleep(REFERRAL_DAILY_SUMMARY_INTERVAL_SEC)
 
 
+REFERRAL_REWARD_FLUSH_INTERVAL_SEC = 30
+
+
+async def auto_flush_referral_reward_buffers(bot: Bot) -> None:
+    """
+    Каждые 30 сек проверяет буферы уведомлений о баллах и отправляет,
+    если last_event_at старше 2 минут (одиночное или агрегированное).
+    """
+    while True:
+        await asyncio.sleep(REFERRAL_REWARD_FLUSH_INTERVAL_SEC)
+        if not await asyncio.to_thread(db.acquire_job_lock, settings.DB_JOB_LOCK_REFERRAL_REWARD_FLUSH):
+            continue
+        try:
+            buffers = await asyncio.to_thread(db.get_referral_reward_buffers_to_flush)
+            for row in buffers:
+                tg_id = row.get("telegram_user_id")
+                if not tg_id:
+                    continue
+                if not await asyncio.to_thread(db.is_ref_points_notification_enabled, tg_id):
+                    await asyncio.to_thread(db.delete_referral_reward_buffer, tg_id)
+                    continue
+                payments_count = int(row.get("payments_count") or 0)
+                points_sum = int(row.get("points_sum") or 0)
+                sub_ids = row.get("subscription_ids") or []
+                first_sub_id = row.get("first_subscription_id")
+                first_points = row.get("first_points") or 0
+                first_level = row.get("first_level")
+                first_tariff = (row.get("first_tariff_code") or "").strip() or "—"
+                referred_sub_id = sub_ids[-1] if sub_ids else first_sub_id
+                if not referred_sub_id:
+                    await asyncio.to_thread(db.delete_referral_reward_buffer, tg_id)
+                    continue
+                try:
+                    if payments_count == 1:
+                        await send_referral_reward_notification(
+                            telegram_user_id=tg_id,
+                            points_delta=first_points,
+                            level=first_level,
+                            tariff_code=first_tariff,
+                            payment_channel="—",
+                            referred_sub_id=first_sub_id,
+                        )
+                    else:
+                        await send_aggregated_referral_reward_notification(
+                            telegram_user_id=tg_id,
+                            payments_count=payments_count,
+                            points_sum=points_sum,
+                            referred_sub_id=referred_sub_id,
+                        )
+                    distinct_subs = list(dict.fromkeys(sub_ids))
+                    for sub_id in distinct_subs:
+                        sub = await asyncio.to_thread(db.get_subscription_by_id, sub_id)
+                        if sub and not await asyncio.to_thread(db.has_subscription_notification, sub_id, "referral_points_awarded"):
+                            await asyncio.to_thread(
+                                db.create_subscription_notification,
+                                subscription_id=sub_id,
+                                notification_type="referral_points_awarded",
+                                telegram_user_id=tg_id,
+                                expires_at=sub.get("expires_at"),
+                            )
+                except Exception as e:
+                    log.warning(
+                        "[ReferralRewardFlush] Failed to send to tg_id=%s: %r",
+                        tg_id,
+                        e,
+                    )
+                finally:
+                    await asyncio.to_thread(db.delete_referral_reward_buffer, tg_id)
+                await asyncio.sleep(1)
+        finally:
+            await asyncio.to_thread(db.release_job_lock, settings.DB_JOB_LOCK_REFERRAL_REWARD_FLUSH)
+
+
 async def main() -> None:
     if not settings.TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in .env")
@@ -8227,6 +8302,7 @@ async def main() -> None:
     asyncio.create_task(auto_config_checkpoint(bot))
     asyncio.create_task(auto_recently_expired_trial_followup(bot))
     asyncio.create_task(auto_referral_daily_summary(bot))
+    asyncio.create_task(auto_flush_referral_reward_buffers(bot))
 
     app = create_app()
     runner = web.AppRunner(app)

@@ -397,6 +397,41 @@ async def send_referral_daily_summary_notification(
         await bot.session.close()
 
 
+REFERRAL_REWARD_AGGREGATED_TEXT = (
+    "🎁 Тебе начислены реферальные баллы!\n\n"
+    "За последние несколько минут:\n\n"
+    "+{payments_count} оплат\n"
+    "+{points_sum} баллов\n\n"
+    "Продолжай делиться — это работает 🚀"
+)
+
+
+async def send_aggregated_referral_reward_notification(
+    telegram_user_id: int,
+    payments_count: int,
+    points_sum: int,
+    referred_sub_id: int,
+) -> None:
+    """
+    Агрегированное уведомление о нескольких начислениях баллов (анти-спам).
+    """
+    text = REFERRAL_REWARD_AGGREGATED_TEXT.format(
+        payments_count=payments_count,
+        points_sum=points_sum,
+    )
+    bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+    try:
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=_make_referral_points_awarded_keyboard(referred_sub_id),
+        )
+    finally:
+        await bot.session.close()
+
+
 async def send_referral_reward_notification(
     telegram_user_id: int,
     points_delta: int,

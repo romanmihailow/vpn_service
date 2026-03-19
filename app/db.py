@@ -3,7 +3,7 @@ import psycopg2.extras
 import psycopg2.pool
 from contextlib import contextmanager
 import contextvars
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 import json
 from .config import settings
@@ -372,6 +372,23 @@ def init_db() -> None:
         telegram_user_id BIGINT PRIMARY KEY,
         ref_connected_enabled BOOLEAN NOT NULL DEFAULT TRUE,
         ref_points_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    --------------------------------------------------------------------
+    -- Буфер агрегации realtime-уведомлений о баллах (анти-спам, 2 мин)
+    --------------------------------------------------------------------
+    CREATE TABLE IF NOT EXISTS referral_reward_notification_buffer (
+        telegram_user_id BIGINT PRIMARY KEY,
+        payments_count INTEGER NOT NULL DEFAULT 0,
+        points_sum BIGINT NOT NULL DEFAULT 0,
+        subscription_ids BIGINT[] NOT NULL DEFAULT '{}',
+        first_subscription_id BIGINT,
+        first_points INTEGER,
+        first_level INTEGER,
+        first_tariff_code TEXT,
+        first_event_at TIMESTAMPTZ NOT NULL,
+        last_event_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     """
@@ -1562,6 +1579,86 @@ def create_referral_daily_summary_sent(telegram_user_id: int) -> None:
     VALUES (%s, CURRENT_DATE, NOW())
     ON CONFLICT (telegram_user_id, sent_date) DO NOTHING;
     """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (telegram_user_id,))
+        conn.commit()
+
+
+REFERRAL_REWARD_BUFFER_WINDOW_SEC = 120
+
+
+def add_to_referral_reward_buffer(
+    telegram_user_id: int,
+    subscription_id: int,
+    points: int,
+    level: Optional[int],
+    tariff_code: str,
+) -> None:
+    """
+    Добавляет событие начисления баллов в буфер для последующей агрегированной отправки.
+    Окно агрегации 2 минуты.
+    """
+    now = datetime.now(timezone.utc)
+    sql = """
+    INSERT INTO referral_reward_notification_buffer (
+        telegram_user_id, payments_count, points_sum, subscription_ids,
+        first_subscription_id, first_points, first_level, first_tariff_code,
+        first_event_at, last_event_at, updated_at
+    )
+    VALUES (%s, 1, %s, ARRAY[%s]::BIGINT[], %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (telegram_user_id) DO UPDATE SET
+        payments_count = referral_reward_notification_buffer.payments_count + 1,
+        points_sum = referral_reward_notification_buffer.points_sum + EXCLUDED.points_sum,
+        subscription_ids = array_cat(referral_reward_notification_buffer.subscription_ids, ARRAY[%s]::BIGINT[]),
+        first_subscription_id = COALESCE(referral_reward_notification_buffer.first_subscription_id, EXCLUDED.first_subscription_id),
+        first_points = COALESCE(referral_reward_notification_buffer.first_points, EXCLUDED.first_points),
+        first_level = COALESCE(referral_reward_notification_buffer.first_level, EXCLUDED.first_level),
+        first_tariff_code = COALESCE(referral_reward_notification_buffer.first_tariff_code, EXCLUDED.first_tariff_code),
+        last_event_at = EXCLUDED.last_event_at,
+        updated_at = EXCLUDED.updated_at;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    telegram_user_id,
+                    points,
+                    subscription_id,
+                    subscription_id,
+                    points,
+                    level,
+                    tariff_code,
+                    now,
+                    now,
+                    now,
+                    subscription_id,
+                ),
+            )
+        conn.commit()
+
+
+def get_referral_reward_buffers_to_flush() -> List[Dict[str, Any]]:
+    """
+    Возвращает буферы, готовые к отправке (last_event_at старше 2 минут).
+    """
+    sql = """
+    SELECT telegram_user_id, payments_count, points_sum, subscription_ids,
+           first_subscription_id, first_points, first_level, first_tariff_code
+    FROM referral_reward_notification_buffer
+    WHERE last_event_at < NOW() - INTERVAL '1 second' * %s;
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (REFERRAL_REWARD_BUFFER_WINDOW_SEC,))
+            rows = cur.fetchall()
+    return [dict(r) for r in rows] if rows else []
+
+
+def delete_referral_reward_buffer(telegram_user_id: int) -> None:
+    """Удаляет запись из буфера после успешной отправки."""
+    sql = "DELETE FROM referral_reward_notification_buffer WHERE telegram_user_id = %s;"
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (telegram_user_id,))
