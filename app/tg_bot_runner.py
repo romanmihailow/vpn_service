@@ -414,6 +414,7 @@ async def try_give_referral_trial_7d(
             telegram_user_id,
             e,
         )
+        raise
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
