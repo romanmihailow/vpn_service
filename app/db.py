@@ -53,14 +53,16 @@ def release_ip_allocation_lock() -> None:
         return
 
     conn = ctx["conn"]
+    # Сначала rollback: если insert_subscription упал (IntegrityError и т.д.),
+    # conn в aborted — pg_advisory_unlock без rollback даст InFailedSqlTransaction
+    try:
+        conn.rollback()
+    except Exception:
+        pass
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(%s);", (settings.DB_IP_ALLOC_LOCK_ID,))
     finally:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         _POOL.putconn(conn)
         _ip_lock_ctx.set(None)
 
