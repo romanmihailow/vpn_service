@@ -4508,7 +4508,7 @@ async def promo_code_apply(message: Message, state: FSMContext) -> None:
         )
 
     if isinstance(new_expires_at, datetime):
-        expires_str = new_fmt_date(expires_at)
+        expires_str = fmt_date(new_expires_at)
     else:
         expires_str = str(new_expires_at)
 
