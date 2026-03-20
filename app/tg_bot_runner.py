@@ -404,11 +404,15 @@ async def try_give_referral_trial_7d(
         )
 
     except Exception as e:
+        # Не освобождать IP при UniqueViolation (idx_vpn_subscriptions_active_ip):
+        # IP уже в активной подписке, release создаёт рассинхрон пула и бесконечный цикл ошибок
         if client_ip and not subscription_created:
-            try:
-                db.release_ip_in_pool(client_ip)
-            except Exception:
-                pass
+            err_str = str(e)
+            if "idx_vpn_subscriptions_active_ip" not in err_str and "23505" not in err_str:
+                try:
+                    db.release_ip_in_pool(client_ip)
+                except Exception:
+                    pass
         log.error(
             "[ReferralTrial] Failed to issue referral trial for tg_id=%s: %r",
             telegram_user_id,

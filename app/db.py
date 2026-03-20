@@ -944,16 +944,21 @@ def allocate_free_ip_from_pool() -> str:
     """
     Атомарно выделяет свободный IP из vpn_ip_pool.
     Использует SELECT ... FOR UPDATE SKIP LOCKED.
+    Исключает IP, которые уже в активных подписках (защита от рассинхрона пула).
     """
     with get_conn() as conn:
         try:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT ip
-                    FROM vpn_ip_pool
-                    WHERE allocated = FALSE
-                    ORDER BY ip
+                    SELECT p.ip
+                    FROM vpn_ip_pool p
+                    WHERE p.allocated = FALSE
+                      AND NOT EXISTS (
+                        SELECT 1 FROM vpn_subscriptions s
+                        WHERE s.vpn_ip::inet = p.ip AND s.active = TRUE
+                      )
+                    ORDER BY p.ip
                     LIMIT 1
                     FOR UPDATE SKIP LOCKED;
                     """
