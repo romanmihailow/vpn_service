@@ -57,6 +57,10 @@ def release_ip_allocation_lock() -> None:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_advisory_unlock(%s);", (settings.DB_IP_ALLOC_LOCK_ID,))
     finally:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         _POOL.putconn(conn)
         _ip_lock_ctx.set(None)
 
